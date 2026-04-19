@@ -33,6 +33,25 @@ omitted, `default` is used. The session is created on first attach and
 
 ## Install as a systemd service
 
+### One-shot installer
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Shinyaigeek/aura/main/server/deploy/install.sh \
+  | sudo bash
+```
+
+Resolves the latest `server-v*` release, installs the binary +
+systemd unit, generates a token at `/etc/aura/aura.env` on first
+run (idempotent on reruns), disables any pre-existing `ghostty-web`
+service, and enables + starts `aura-server`. Works on Debian/Ubuntu
+(apt), Fedora/RHEL (dnf), and Arch (pacman) for the tmux dependency.
+
+Overrides: `AURA_VERSION=server-vX.Y.Z`, `AURA_ADDR=:9000`,
+`AURA_USER=other`, `SKIP_GHOSTTY=1`. See
+[`deploy/install.sh`](deploy/install.sh).
+
+### Manual
+
 ```sh
 sudo install -m 0755 bin/aura-server /usr/local/bin/aura-server
 sudo install -m 0644 deploy/aura-server.service /etc/systemd/system/aura-server.service

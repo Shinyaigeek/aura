@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+#
+# aura-server one-shot installer.
+#
+# Usage (run on the Linux host that will serve terminal sessions):
+#
+#   curl -fsSL https://raw.githubusercontent.com/Shinyaigeek/aura/main/server/deploy/install.sh \
+#     | sudo bash
+#
+# Re-running the script is safe: it upgrades the binary and service
+# unit in-place, preserves any existing /etc/aura/aura.env (so your
+# token is not rotated), and leaves the systemd unit enabled.
+#
+# Environment overrides:
+#   AURA_VERSION    tag to install, e.g. "server-v0.0.1" (default: latest)
+#   AURA_USER       unix user to run the service as (default: SUDO_USER or current)
+#   AURA_HOME       home directory for that user (default: auto-detected)
+#   AURA_ADDR       listen address (default: :8787)
+#   SKIP_GHOSTTY    set to 1 to leave any ghostty-web service alone
+set -euo pipefail
+
+log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m-->\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[1;31m!!>\033[0m %s\n' "$*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] || die "Run as root: curl ... | sudo bash"
+
+REPO="Shinyaigeek/aura"
+AURA_USER="${AURA_USER:-${SUDO_USER:-$(id -un)}}"
+AURA_HOME="${AURA_HOME:-$(getent passwd "$AURA_USER" | cut -d: -f6)}"
+AURA_ADDR="${AURA_ADDR:-:8787}"
+[[ -n "$AURA_HOME" ]] || die "Could not resolve home directory for user $AURA_USER"
+
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) die "Unsupported architecture: $(uname -m)" ;;
+esac
+
+if [[ -z "${AURA_VERSION:-}" ]]; then
+  log "Resolving latest server release"
+  AURA_VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases" \
+    | grep -oE '"tag_name":[[:space:]]*"server-v[^"]+"' \
+    | head -n1 \
+    | sed -E 's/.*"(server-v[^"]+)".*/\1/')
+  [[ -n "$AURA_VERSION" ]] || die "No server-* release found"
+fi
+VERSION="${AURA_VERSION#server-}"
+log "Installing aura-server $VERSION ($ARCH) for user $AURA_USER ($AURA_HOME)"
+
+log "Installing tmux if missing"
+if ! command -v tmux >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq
+    apt-get install -y tmux
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y tmux
+  elif command -v pacman >/dev/null 2>&1; then
+    pacman -Sy --noconfirm tmux
+  else
+    die "No supported package manager found. Install tmux manually and rerun."
+  fi
+fi
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+tarball="aura-server-${VERSION}-linux-${ARCH}.tar.gz"
+url="https://github.com/$REPO/releases/download/${AURA_VERSION}/${tarball}"
+log "Downloading $url"
+curl -fsSL -o "$tmpdir/$tarball" "$url"
+
+log "Extracting"
+tar -C "$tmpdir" -xzf "$tmpdir/$tarball"
+dir="$tmpdir/aura-server-${VERSION}-linux-${ARCH}"
+[[ -x "$dir/aura-server" ]] || die "Expected $dir/aura-server to be executable"
+
+log "Installing binary → /usr/local/bin/aura-server"
+install -m0755 "$dir/aura-server" /usr/local/bin/aura-server
+
+log "Installing systemd unit → /etc/systemd/system/aura-server.service"
+sed \
+  -e "s|^User=.*|User=${AURA_USER}|" \
+  -e "s|^WorkingDirectory=.*|WorkingDirectory=${AURA_HOME}|" \
+  -e "s|^ReadWritePaths=.*|ReadWritePaths=${AURA_HOME} /tmp|" \
+  -e "s|^ExecStart=.*|ExecStart=/usr/local/bin/aura-server -addr ${AURA_ADDR}|" \
+  "$dir/aura-server.service" > /etc/systemd/system/aura-server.service
+chmod 0644 /etc/systemd/system/aura-server.service
+
+install -d -m0750 /etc/aura
+if [[ ! -f /etc/aura/aura.env ]]; then
+  token=$(openssl rand -hex 32)
+  umask 077
+  cat > /etc/aura/aura.env <<EOF
+AURA_TOKEN=${token}
+EOF
+  chmod 0640 /etc/aura/aura.env
+  log "Wrote new token to /etc/aura/aura.env"
+  printf '\n    token: %s\n\n' "$token"
+  warn "Copy this token into the mobile app Settings now — it will not be shown again."
+else
+  log "/etc/aura/aura.env already exists; leaving it untouched"
+fi
+
+if [[ "${SKIP_GHOSTTY:-0}" != "1" ]] && systemctl list-unit-files 2>/dev/null | grep -q '^ghostty-web\.service'; then
+  log "Disabling ghostty-web.service"
+  systemctl disable --now ghostty-web >/dev/null 2>&1 || true
+fi
+
+log "Reloading systemd and starting aura-server"
+systemctl daemon-reload
+systemctl enable --now aura-server
+
+sleep 1
+systemctl --no-pager status aura-server | head -n 12 || true
+
+log "Health check"
+if curl -fsS "http://127.0.0.1${AURA_ADDR}/healthz" >/dev/null; then
+  printf '\033[1;32m==> healthz ok\033[0m\n'
+else
+  warn "healthz failed — check: journalctl -u aura-server -n 100 --no-pager"
+  exit 1
+fi
+
+log "Done. aura-server is listening on ${AURA_ADDR}."
