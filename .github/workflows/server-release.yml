@@ -24,12 +24,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache-dependency-path: server/go.sum
 
       - name: Resolve version
         id: version
         run: |
           echo "version=${GITHUB_REF_NAME#server-}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve modules
+        working-directory: server
+        run: go mod tidy
 
       - name: Build
         working-directory: server
