@@ -34,25 +34,18 @@ jobs:
         working-directory: server
         run: go mod tidy
 
-      - name: Build
+      - name: Build and package
         working-directory: server
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
-          mkdir -p dist
-          ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}"
-          out="dist/aura-server-${{ steps.version.outputs.version }}-${GOOS}-${GOARCH}"
-          go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/aura-server
-
-      - name: Package
-        working-directory: server
-        run: |
           v="${{ steps.version.outputs.version }}"
-          dir="aura-server-${v}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          dir="aura-server-${v}-${GOOS}-${GOARCH}"
           mkdir -p "dist/$dir"
-          cp "dist/aura-server-${v}-${{ matrix.goos }}-${{ matrix.goarch }}" "dist/$dir/aura-server"
+          ldflags="-s -w -X main.version=${v}"
+          go build -trimpath -ldflags "$ldflags" -o "dist/$dir/aura-server" ./cmd/aura-server
           cp README.md "dist/$dir/README.md"
           cp deploy/aura-server.service "dist/$dir/"
           cp deploy/aura.env.example "dist/$dir/"
