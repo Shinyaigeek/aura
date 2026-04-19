@@ -21,13 +21,19 @@ export default function App() {
         <Stack.Navigator
           initialRouteName="Terminal"
           screenOptions={{
-            headerStyle: { backgroundColor: "#0b0b0b" },
-            headerTintColor: "#e5e5e5",
-            contentStyle: { backgroundColor: "#0b0b0b" },
+            headerStyle: { backgroundColor: "#0b0b0f" },
+            headerTintColor: "#e4e6ef",
+            headerTitleStyle: { fontWeight: "600" },
+            headerShadowVisible: false,
+            contentStyle: { backgroundColor: "#0b0b0f" },
           }}
         >
           <Stack.Screen name="Terminal" component={TerminalScreen} />
-          <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen
+            name="Settings"
+            component={SettingsScreen}
+            options={{ title: "Settings", headerBackTitle: "Back" }}
+          />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
