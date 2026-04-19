@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "aura",
+    "slug": "aura",
+    "scheme": "aura",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.shinyaigeek.aura",
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "package": "dev.shinyaigeek.aura",
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0b0b"
+      }
+    },
+    "plugins": []
+  }
+}
