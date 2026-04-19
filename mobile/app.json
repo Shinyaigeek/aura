@@ -3,7 +3,7 @@
     "name": "aura",
     "slug": "aura",
     "scheme": "aura",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -34,6 +34,14 @@
         {
           "backgroundColor": "#0b0b0b",
           "resizeMode": "contain"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ]
