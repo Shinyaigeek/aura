@@ -23,7 +23,8 @@ export const terminalHtml = `<!doctype html>
 <style>
   html, body, #term { margin: 0; padding: 0; height: 100%; width: 100%; background: #0b0b0f; }
   body { overflow: hidden; -webkit-tap-highlight-color: transparent; }
-  #term { padding: 6px 4px 0 6px; box-sizing: border-box; }
+  #term { padding: 6px 4px 0 6px; box-sizing: border-box; touch-action: pan-y; }
+  .xterm, .xterm-viewport, .xterm-screen { touch-action: pan-y; }
   .xterm .xterm-viewport { background-color: transparent !important; }
   .xterm-selection div { background-color: rgba(122, 162, 247, 0.25) !important; }
 </style>
@@ -101,6 +102,46 @@ export const terminalHtml = `<!doctype html>
     window.__auraFocus = function () { term.focus(); };
 
     window.addEventListener('resize', sendResize);
+
+    // Touch-drag scrollback. xterm-screen sits on top of xterm-viewport and
+    // absorbs pointer events, so native overflow-scroll on the viewport never
+    // fires from a swipe. Translate single-finger vertical drags into
+    // term.scrollLines() calls; short taps still fall through to xterm so the
+    // keyboard comes up.
+    var termEl = document.getElementById('term');
+    var touchStartY = 0;
+    var touchStartX = 0;
+    var touchLastY = 0;
+    var touchScrolling = false;
+    var touchAccum = 0;
+    termEl.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) return;
+      touchStartY = touchLastY = e.touches[0].clientY;
+      touchStartX = e.touches[0].clientX;
+      touchScrolling = false;
+      touchAccum = 0;
+    }, { passive: true });
+    termEl.addEventListener('touchmove', function (e) {
+      if (e.touches.length !== 1) return;
+      var y = e.touches[0].clientY;
+      var x = e.touches[0].clientX;
+      if (!touchScrolling) {
+        var dy = y - touchStartY;
+        var dx = x - touchStartX;
+        if (Math.abs(dy) <= 8 || Math.abs(dy) <= Math.abs(dx)) return;
+        touchScrolling = true;
+      }
+      e.preventDefault();
+      var lineH = term.options.fontSize * term.options.lineHeight;
+      if (!lineH || lineH <= 0) lineH = 16;
+      touchAccum += (touchLastY - y) / lineH;
+      touchLastY = y;
+      var lines = touchAccum > 0 ? Math.floor(touchAccum) : Math.ceil(touchAccum);
+      if (lines !== 0) {
+        term.scrollLines(lines);
+        touchAccum -= lines;
+      }
+    }, { passive: false });
 
     // Initial handshake once layout has settled.
     requestAnimationFrame(function () {
