@@ -33,6 +33,32 @@ type Manager interface {
 	Attach(id string) (*session.Session, error)
 }
 
+// KillManager is Manager with the ability to terminate a session. Split from
+// Manager so tests that only need Attach don't have to implement Kill.
+type KillManager interface {
+	Manager
+	Kill(id string) error
+}
+
+// NewKillHandler handles DELETE /sessions/{id} — explicitly terminates a
+// tmux session. The whole point of aura is that sessions outlive clients, so
+// this is the single place where we deliberately break that invariant.
+func NewKillHandler(mgr KillManager) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "" {
+			http.Error(w, "missing session id", http.StatusBadRequest)
+			return
+		}
+		if err := mgr.Kill(id); err != nil {
+			slog.Error("kill failed", "id", id, "err", err)
+			http.Error(w, "kill failed", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
 func NewHandler(mgr Manager) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("session")

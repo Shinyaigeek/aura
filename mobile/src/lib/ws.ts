@@ -32,6 +32,7 @@ export class WsClient {
 
   constructor(
     private readonly cfg: ServerConfig,
+    private readonly sessionId: string,
     private readonly cb: WsClientCallbacks,
   ) {}
 
@@ -57,8 +58,12 @@ export class WsClient {
     this.cb.onStatus("closed");
   }
 
-  /** Force a reconnect immediately — used when the app returns to foreground. */
+  /** Force a (re)connect immediately — used when the app returns to foreground
+   * or when a previously-stopped client is being revived (e.g. tab becomes
+   * active again after an idle detach). Resets `closedByUser` so that the next
+   * dropped connection triggers auto-reconnect instead of staying dead. */
   kick(): void {
+    this.closedByUser = false;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -125,7 +130,7 @@ export class WsClient {
   private buildUrl(): string {
     const base = this.cfg.url.replace(/\/+$/, "");
     const params = new URLSearchParams({
-      session: this.cfg.sessionId || "default",
+      session: this.sessionId || "default",
       token: this.cfg.token,
     });
     return `${base}/ws?${params.toString()}`;

@@ -3,10 +3,12 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   AppState,
   type AppStateStatus,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -15,26 +17,40 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import type { RootStackParamList } from "../../App";
 import { base64ToBytes, bytesToBase64 } from "@/lib/base64";
-import { loadConfig, type ServerConfig } from "@/lib/storage";
+import { killSession } from "@/lib/kill-session";
+import {
+  loadConfig,
+  loadTabs,
+  nextTabId,
+  saveTabs,
+  type ServerConfig,
+  type Tab,
+  type TabsState,
+} from "@/lib/storage";
 import { terminalHtml } from "@/lib/terminal-html";
 import { WsClient, type WsStatus } from "@/lib/ws";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Terminal">;
 
+// How long a tab must be unfocused before we drop its WebSocket. The tmux
+// session on the server stays alive; the user just pays a reconnect the next
+// time they switch back to it. The number is a tradeoff between battery
+// (fewer idle sockets) and latency-to-visible (how long the redraw takes on
+// switch-back). One hour matches the user's stated intent.
+const IDLE_DETACH_MS = 60 * 60 * 1000;
+
 export default function TerminalScreen({ navigation }: Props) {
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
-  const [status, setStatus] = useState<WsStatus>("closed");
-  const webRef = useRef<WebView | null>(null);
-  const clientRef = useRef<WsClient | null>(null);
-  const webReadyRef = useRef(false);
-  const pendingFramesRef = useRef<Uint8Array[]>([]);
-  const flushScheduledRef = useRef(false);
+  const [tabsState, setTabsState] = useState<TabsState | null>(null);
+  const [statuses, setStatuses] = useState<Record<string, WsStatus>>({});
 
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      loadConfig().then((c) => {
-        if (!cancelled) setCfg(c);
+      Promise.all([loadConfig(), loadTabs()]).then(([c, t]) => {
+        if (cancelled) return;
+        setCfg(c);
+        setTabsState(t);
       });
       return () => {
         cancelled = true;
@@ -42,9 +58,18 @@ export default function TerminalScreen({ navigation }: Props) {
     }, []),
   );
 
+  // Persist on every mutation. Cheap — AsyncStorage write is a few KB.
+  useEffect(() => {
+    if (tabsState) void saveTabs(tabsState);
+  }, [tabsState]);
+
+  const activeStatus: WsStatus = tabsState
+    ? (statuses[tabsState.activeTabId] ?? "closed")
+    : "closed";
+
   useEffect(() => {
     navigation.setOptions({
-      headerTitle: () => <HeaderTitle status={status} />,
+      headerTitle: () => <HeaderTitle status={activeStatus} />,
       headerRight: () => (
         <Pressable
           onPress={() => navigation.navigate("Settings")}
@@ -55,7 +80,133 @@ export default function TerminalScreen({ navigation }: Props) {
         </Pressable>
       ),
     });
-  }, [navigation, status]);
+  }, [navigation, activeStatus]);
+
+  const handleStatus = useCallback((id: string, status: WsStatus) => {
+    setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
+  }, []);
+
+  const addTab = useCallback(() => {
+    setTabsState((prev) => {
+      if (!prev) return prev;
+      const id = nextTabId(prev.tabs);
+      return {
+        tabs: [...prev.tabs, { id, label: id }],
+        activeTabId: id,
+      };
+    });
+  }, []);
+
+  const selectTab = useCallback((id: string) => {
+    setTabsState((prev) => (prev && prev.activeTabId !== id ? { ...prev, activeTabId: id } : prev));
+  }, []);
+
+  const closeTab = useCallback(
+    (id: string) => {
+      const runClose = () => {
+        setTabsState((prev) => {
+          if (!prev) return prev;
+          const remaining = prev.tabs.filter((t) => t.id !== id);
+          if (remaining.length === 0) {
+            // Keep at least one tab around so the UI has something to show.
+            const fresh = nextTabId([]);
+            return { tabs: [{ id: fresh, label: fresh }], activeTabId: fresh };
+          }
+          const activeTabId =
+            prev.activeTabId === id ? remaining[remaining.length - 1].id : prev.activeTabId;
+          return { tabs: remaining, activeTabId };
+        });
+        setStatuses((prev) => {
+          if (!(id in prev)) return prev;
+          const { [id]: _dropped, ...rest } = prev;
+          return rest;
+        });
+        if (cfg?.url && cfg?.token) {
+          void killSession(cfg, id).catch((err) => {
+            console.warn("killSession failed", err);
+          });
+        }
+      };
+
+      Alert.alert(
+        "Close tab?",
+        `This terminates the tmux session "${id}" on the server. Running processes will be killed.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Close", style: "destructive", onPress: runClose },
+        ],
+      );
+    },
+    [cfg],
+  );
+
+  if (!cfg || !cfg.url || !cfg.token) {
+    return (
+      <View style={styles.emptyContainer}>
+        <View style={styles.emptyCard}>
+          <Text style={styles.emptyIcon}>◈</Text>
+          <Text style={styles.emptyTitle}>Welcome to aura</Text>
+          <Text style={styles.emptySubtitle}>
+            Connect to your aura-server to attach to a persistent tmux session.
+          </Text>
+          <Pressable
+            onPress={() => navigation.navigate("Settings")}
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
+          >
+            <Text style={styles.primaryButtonText}>Set up connection</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  if (!tabsState) return <View style={styles.container} />;
+
+  return (
+    <View style={styles.container}>
+      <TabBar
+        tabs={tabsState.tabs}
+        activeTabId={tabsState.activeTabId}
+        statuses={statuses}
+        onSelect={selectTab}
+        onClose={closeTab}
+        onAdd={addTab}
+      />
+      <View style={styles.terminalWrap}>
+        {tabsState.tabs.map((tab) => (
+          <TabView
+            key={tab.id}
+            cfg={cfg}
+            tab={tab}
+            active={tab.id === tabsState.activeTabId}
+            onStatus={handleStatus}
+          />
+        ))}
+      </View>
+      {activeStatus !== "open" && <OfflineBanner status={activeStatus} />}
+    </View>
+  );
+}
+
+type TabViewProps = {
+  cfg: ServerConfig;
+  tab: Tab;
+  active: boolean;
+  onStatus: (id: string, status: WsStatus) => void;
+};
+
+// One tab = one WebSocket + one WebView (with its own xterm.js instance).
+// Non-active tabs stay mounted with `display:none` so their scrollback and
+// xterm buffer survive tab switches. The WebSocket, in contrast, is dropped
+// after IDLE_DETACH_MS of being non-active — the server's tmux session keeps
+// running regardless.
+function TabView({ cfg, tab, active, onStatus }: TabViewProps) {
+  const webRef = useRef<WebView | null>(null);
+  const clientRef = useRef<WsClient | null>(null);
+  const webReadyRef = useRef(false);
+  const pendingFramesRef = useRef<Uint8Array[]>([]);
+  const flushScheduledRef = useRef(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flushPending = useCallback(() => {
     flushScheduledRef.current = false;
@@ -75,44 +226,73 @@ export default function TerminalScreen({ navigation }: Props) {
     webRef.current?.injectJavaScript(`window.__auraWrite(${JSON.stringify(b64)});true;`);
   }, []);
 
+  // Own the WsClient for this tab's lifetime. Creation runs when cfg or tab.id
+  // change; the active-state effect below decides when to actually connect.
   useEffect(() => {
-    if (!cfg || !cfg.url || !cfg.token) return;
-
-    const client = new WsClient(cfg, {
-      onStatus: setStatus,
+    const client = new WsClient(cfg, tab.id, {
+      onStatus: (s) => onStatus(tab.id, s),
       onBinary: (data) => {
         if (!webReadyRef.current) return;
         pendingFramesRef.current.push(new Uint8Array(data));
         if (!flushScheduledRef.current) {
           flushScheduledRef.current = true;
-          // Coalesce frames that arrive in the same tick into a single
-          // injectJavaScript call. The WebView bridge is the expensive step,
-          // so batching here cuts per-byte overhead when the server sends
-          // several small frames in quick succession (prompt repaints, etc.).
-          // setTimeout(0) yields ~next-tick batching without noticeable lag.
           setTimeout(flushPending, 0);
         }
       },
     });
     clientRef.current = client;
-    client.start();
-
-    const sub = AppState.addEventListener("change", (next: AppStateStatus) => {
-      if (next === "active") client.kick();
-    });
 
     return () => {
-      sub.remove();
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
       client.stop();
       clientRef.current = null;
       pendingFramesRef.current = [];
+      webReadyRef.current = false;
     };
-  }, [cfg, flushPending]);
+  }, [cfg, tab.id, onStatus, flushPending]);
+
+  // React to active-state changes. Becoming active clears the idle timer and
+  // kicks a reconnect if needed; becoming inactive starts the countdown.
+  useEffect(() => {
+    const client = clientRef.current;
+    if (!client) return;
+    if (active) {
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
+      client.kick();
+      if (webReadyRef.current) {
+        // Re-fit in case viewport dimensions changed while hidden (keyboard,
+        // rotation), and refocus so keystrokes land immediately.
+        webRef.current?.injectJavaScript("window.__auraFit();window.__auraFocus();true;");
+      }
+    } else {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        idleTimerRef.current = null;
+        clientRef.current?.stop();
+      }, IDLE_DETACH_MS);
+    }
+  }, [active]);
+
+  // Foreground reconnect: only the currently-active tab gets auto-kicked.
+  // Hidden tabs wait until the user visits them — no point racing N sockets
+  // through a flaky first-minute-after-resume window.
+  useEffect(() => {
+    if (!active) return;
+    const sub = AppState.addEventListener("change", (next: AppStateStatus) => {
+      if (next === "active") clientRef.current?.kick();
+    });
+    return () => sub.remove();
+  }, [active]);
 
   const onWebMessage = useCallback((event: WebViewMessageEvent) => {
     const raw = event.nativeEvent.data;
     if (!raw) return;
-    // Compact prefix protocol — avoid JSON.parse per keystroke.
     const prefix = raw.charCodeAt(0);
     // 'i' = input
     if (prefix === 105) {
@@ -140,28 +320,11 @@ export default function TerminalScreen({ navigation }: Props) {
 
   const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);
 
-  if (!cfg || !cfg.url || !cfg.token) {
-    return (
-      <View style={styles.emptyContainer}>
-        <View style={styles.emptyCard}>
-          <Text style={styles.emptyIcon}>◈</Text>
-          <Text style={styles.emptyTitle}>Welcome to aura</Text>
-          <Text style={styles.emptySubtitle}>
-            Connect to your aura-server to attach to a persistent tmux session.
-          </Text>
-          <Pressable
-            onPress={() => navigation.navigate("Settings")}
-            style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
-          >
-            <Text style={styles.primaryButtonText}>Set up connection</Text>
-          </Pressable>
-        </View>
-      </View>
-    );
-  }
-
   return (
-    <View style={styles.container}>
+    <View
+      style={[styles.tabView, !active && styles.tabViewHidden]}
+      pointerEvents={active ? "auto" : "none"}
+    >
       <WebView
         ref={webRef}
         originWhitelist={["*"]}
@@ -179,7 +342,66 @@ export default function TerminalScreen({ navigation }: Props) {
         androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
         scrollEnabled={false}
       />
-      {status !== "open" && <OfflineBanner status={status} />}
+    </View>
+  );
+}
+
+type TabBarProps = {
+  tabs: readonly Tab[];
+  activeTabId: string;
+  statuses: Record<string, WsStatus>;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
+  onAdd: () => void;
+};
+
+function TabBar({ tabs, activeTabId, statuses, onSelect, onClose, onAdd }: TabBarProps) {
+  return (
+    <View style={styles.tabBar}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabBarContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        {tabs.map((tab) => {
+          const isActive = tab.id === activeTabId;
+          const status = statuses[tab.id] ?? "closed";
+          return (
+            <Pressable
+              key={tab.id}
+              onPress={() => onSelect(tab.id)}
+              style={({ pressed }) => [
+                styles.tabPill,
+                isActive && styles.tabPillActive,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <View style={[styles.statusDot, statusDotStyle(status), styles.tabPillDot]} />
+              <Text
+                style={[styles.tabPillText, isActive && styles.tabPillTextActive]}
+                numberOfLines={1}
+              >
+                {tab.label}
+              </Text>
+              <Pressable
+                onPress={() => onClose(tab.id)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.tabCloseButton, pressed && { opacity: 0.5 }]}
+              >
+                <Text style={styles.tabCloseText}>×</Text>
+              </Pressable>
+            </Pressable>
+          );
+        })}
+        <Pressable
+          onPress={onAdd}
+          style={({ pressed }) => [styles.tabAddButton, pressed && { opacity: 0.6 }]}
+          hitSlop={6}
+        >
+          <Text style={styles.tabAddText}>+</Text>
+        </Pressable>
+      </ScrollView>
     </View>
   );
 }
@@ -233,7 +455,78 @@ function statusDotStyle(s: WsStatus) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0f" },
+  terminalWrap: { flex: 1, position: "relative" },
+  tabView: { ...StyleSheet.absoluteFillObject },
+  tabViewHidden: { display: "none" },
   web: { flex: 1, backgroundColor: "#0b0b0f" },
+
+  tabBar: {
+    backgroundColor: "#0b0b0f",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1a1c26",
+  },
+  tabBarContent: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    alignItems: "center",
+  },
+  tabPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingLeft: 10,
+    paddingRight: 4,
+    paddingVertical: 6,
+    marginRight: 6,
+    borderRadius: 999,
+    backgroundColor: "#14151c",
+    borderWidth: 1,
+    borderColor: "#20222c",
+    maxWidth: 180,
+  },
+  tabPillActive: {
+    backgroundColor: "#1c2030",
+    borderColor: "#3b4262",
+  },
+  tabPillDot: { marginRight: 6 },
+  tabPillText: {
+    color: "#8b90a8",
+    fontSize: 13,
+    fontWeight: "500",
+    letterSpacing: 0.2,
+    maxWidth: 120,
+  },
+  tabPillTextActive: { color: "#e4e6ef" },
+  tabCloseButton: {
+    marginLeft: 6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabCloseText: {
+    color: "#6b7089",
+    fontSize: 16,
+    lineHeight: 18,
+    fontWeight: "600",
+  },
+  tabAddButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#14151c",
+    borderWidth: 1,
+    borderColor: "#20222c",
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 2,
+  },
+  tabAddText: {
+    color: "#c0caf5",
+    fontSize: 18,
+    fontWeight: "600",
+    lineHeight: 20,
+  },
 
   headerTitleWrap: { flexDirection: "row", alignItems: "center" },
   headerTitleText: {

@@ -40,6 +40,7 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.Handle("GET /ws", authMw(ws.NewHandler(mgr)))
+	mux.Handle("DELETE /sessions/{id}", authMw(ws.NewKillHandler(mgr)))
 
 	srv := &http.Server{
 		Addr:              *addr,

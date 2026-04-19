@@ -17,14 +17,10 @@ import { loadConfig, saveConfig, type ServerConfig } from "@/lib/storage";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Settings">;
 
-type FieldKey = "url" | "token" | "sessionId";
+type FieldKey = "url" | "token";
 
 export default function SettingsScreen({ navigation }: Props) {
-  const [cfg, setCfg] = useState<ServerConfig>({
-    url: "",
-    token: "",
-    sessionId: "default",
-  });
+  const [cfg, setCfg] = useState<ServerConfig>({ url: "", token: "" });
   const [loaded, setLoaded] = useState(false);
   const [focused, setFocused] = useState<FieldKey | null>(null);
 
@@ -39,7 +35,6 @@ export default function SettingsScreen({ navigation }: Props) {
     const trimmed: ServerConfig = {
       url: cfg.url.trim(),
       token: cfg.token.trim(),
-      sessionId: cfg.sessionId.trim() || "default",
     };
     if (!/^wss?:\/\//.test(trimmed.url)) {
       Alert.alert("Invalid URL", "Server URL must start with ws:// or wss://");
@@ -106,25 +101,6 @@ export default function SettingsScreen({ navigation }: Props) {
               onFocus={() => setFocused("token")}
               onBlur={() => setFocused(null)}
             />
-          </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>Session id</Text>
-            <TextInput
-              style={inputStyle("sessionId")}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="default"
-              placeholderTextColor="#4a4e63"
-              value={cfg.sessionId}
-              onChangeText={(sessionId) => setCfg((c) => ({ ...c, sessionId }))}
-              onFocus={() => setFocused("sessionId")}
-              onBlur={() => setFocused(null)}
-            />
-            <Text style={styles.hint}>
-              Selects which long-lived tmux session to attach to. Change this to run several in
-              parallel.
-            </Text>
           </View>
         </View>
 

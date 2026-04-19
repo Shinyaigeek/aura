@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/Shinyaigeek/aura/server/internal/tmux"
@@ -72,6 +73,33 @@ func (m *Manager) CloseAll() {
 		_ = s.Close()
 		delete(m.sessions, id)
 	}
+}
+
+// Kill tears down the attached client and terminates the underlying tmux
+// session. Unlike Close, this is destructive — the tmux session is gone and
+// reattaching with the same id produces a fresh shell.
+func (m *Manager) Kill(id string) error {
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	if ok {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+
+	if s != nil {
+		_ = s.Close()
+	}
+
+	out, err := exec.Command("tmux", tmux.KillArgs(id)...).CombinedOutput()
+	if err != nil {
+		msg := string(out)
+		// Idempotent: if the session doesn't exist on the tmux side we're done.
+		if strings.Contains(msg, "can't find session") || strings.Contains(msg, "no server running") {
+			return nil
+		}
+		return fmt.Errorf("tmux kill-session %q: %w: %s", id, err, msg)
+	}
+	return nil
 }
 
 // Session is a single tmux session plus its attached PTY.
