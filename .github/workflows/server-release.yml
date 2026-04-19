@@ -1,0 +1,68 @@
+name: server-release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Only fire on server-prefixed release tags.
+    if: startsWith(github.event.release.tag_name, 'server-v')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: server/go.sum
+
+      - name: Resolve version
+        id: version
+        run: |
+          echo "version=${GITHUB_REF_NAME#server-}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        working-directory: server
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}"
+          out="dist/aura-server-${{ steps.version.outputs.version }}-${GOOS}-${GOARCH}"
+          go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/aura-server
+
+      - name: Package
+        working-directory: server
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          dir="aura-server-${v}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "dist/$dir"
+          cp "dist/aura-server-${v}-${{ matrix.goos }}-${{ matrix.goarch }}" "dist/$dir/aura-server"
+          cp README.md "dist/$dir/README.md"
+          cp deploy/aura-server.service "dist/$dir/"
+          cp deploy/aura.env.example "dist/$dir/"
+          tar -C dist -czf "dist/${dir}.tar.gz" "$dir"
+          (cd dist && sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256")
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          dir="aura-server-${v}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "server/dist/${dir}.tar.gz" \
+            "server/dist/${dir}.tar.gz.sha256" \
+            --clobber

@@ -28,7 +28,37 @@ unloads, or the network dies, we:
 The running process (claude, a shell, whatever) is owned by tmux on the
 server and never saw the disconnect.
 
-## Setup
+## Quick test on a physical device (Expo Go)
+
+All of aura's current native deps (`react-native-webview`,
+`@react-native-async-storage/async-storage`, navigation, safe-area,
+screens) ship inside Expo Go, so no custom native build is needed to
+try it.
+
+On your phone:
+
+1. Install **Expo Go** from the App Store / Play Store.
+
+On your laptop:
+
+```sh
+cd mobile
+npm install
+npx expo start --tunnel
+```
+
+Scan the QR code in the terminal with Expo Go (Android) or the Camera
+app (iOS). The app will load, and on first launch open **Settings** to
+enter server URL / token / session id.
+
+> `--tunnel` routes through Expo's relay, so the phone does not need to
+> be on the same network as your laptop. Drop it to `--lan` once you
+> are at home for lower latency.
+
+## Native build (standalone app)
+
+When you outgrow Expo Go — custom native modules, release builds,
+background behavior — build standalone:
 
 ```sh
 cd mobile
@@ -37,7 +67,7 @@ npx expo prebuild           # generates ios/ and android/ projects
 npx expo run:ios            # or: npx expo run:android
 ```
 
-On first launch, open Settings and enter:
+## Settings
 
 - **Server URL** — e.g. `ws://desktop.lan:8787` (no path; `/ws` is
   appended).
