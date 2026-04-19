@@ -32,9 +32,21 @@ jobs:
       - name: Expo prebuild (android)
         run: npx expo prebuild --platform android --no-install --non-interactive
 
+      - name: Raise Gradle heap
+        # Expo's generated gradle.properties sets -Xmx around 2–4GB, which
+        # OOMs under JetifyTransform on ubuntu-latest. Override by appending
+        # a larger heap — Gradle reads later entries last, so ours wins.
+        run: |
+          cat >> android/gradle.properties <<'EOF'
+
+          # aura CI overrides
+          org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+          org.gradle.workers.max=2
+          EOF
+
       - name: Build release APK
         working-directory: mobile/android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon --max-workers=2
 
       - name: Collect APK
         id: apk
