@@ -59,7 +59,7 @@ The repo has two independent release tracks:
 | Tag prefix   | Trigger                        | Artifact                                                              |
 | ------------ | ------------------------------ | --------------------------------------------------------------------- |
 | `server-v*`  | GitHub release published       | `aura-server` tarballs for `linux/amd64` and `linux/arm64`, attached to the release |
-| `mobile-v*`  | GitHub release published       | iOS + Android builds via EAS (internal distribution)                  |
+| `mobile-v*`  | GitHub release published       | Signed Android `.apk` attached directly to the release                |
 
 To cut a release:
 
@@ -76,25 +76,20 @@ test` for the server and `tsc --noEmit` for the mobile app.
 
 ## Required secrets
 
-Configure these in **Settings → Secrets and variables → Actions**:
-
-- `EXPO_TOKEN` — personal access token from
-  [expo.dev/settings/access-tokens](https://expo.dev/settings/access-tokens).
-  Required by `mobile-release.yml` to launch EAS builds.
-
-The server workflow only uses the built-in `GITHUB_TOKEN`.
+Both workflows use only the built-in `GITHUB_TOKEN`. No third-party
+accounts are required for the default Android APK release path.
 
 ## Installing a mobile release build
 
-EAS builds land on your Expo dashboard rather than on the GitHub
-release (they're too big and often require signing credentials that
-shouldn't leave EAS).
-
-- **iOS**: use an internal-distribution build (ad-hoc or TestFlight)
-  via `eas submit` once signing is configured. For the first
-  Apple-Developer-free pass, just run the app via Expo Go.
-- **Android**: download the `.apk` from the EAS build page and
-  sideload it, or attach it to the GitHub release manually.
+- **Android** (shipped by default): download `aura-<version>.apk` from
+  the release page, transfer to the phone, enable "Install unknown
+  apps" for your file manager, tap to install. The APK is signed with
+  the Expo-generated debug key, which is fine for personal sideload —
+  not for Play Store distribution.
+- **iOS**: not built in CI. Apple requires a paid Developer Program
+  account ($99/year) for any install on a physical device
+  (ad-hoc / TestFlight / App Store). Until then, use the Expo Go path
+  documented in [`mobile/README.md`](mobile/README.md).
 
 ## Status
 

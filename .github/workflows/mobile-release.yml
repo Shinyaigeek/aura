@@ -5,11 +5,10 @@ on:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-    # Only fire on mobile-prefixed release tags.
+  android:
     if: startsWith(github.event.release.tag_name, 'mobile-v')
     runs-on: ubuntu-latest
     defaults:
@@ -21,24 +20,41 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: mobile/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
       - name: Install deps
-        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
-      - uses: expo/expo-github-action@v8
-        with:
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Expo prebuild (android)
+        run: npx expo prebuild --platform android --no-install --non-interactive
 
-      - name: Trigger EAS build
-        # Non-interactive, no-wait: EAS runs the build on its own runners and
-        # attaches installable artifacts to the Expo project. The GitHub
-        # Action just kicks it off and returns.
+      - name: Build release APK
+        working-directory: mobile/android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Collect APK
+        id: apk
         run: |
-          eas build \
-            --profile preview \
-            --platform all \
-            --non-interactive \
-            --no-wait
+          v="${GITHUB_REF_NAME#mobile-}"
+          src=$(find android/app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          if [ -z "$src" ]; then
+            echo "No APK produced"; exit 1
+          fi
+          out="aura-${v}.apk"
+          cp "$src" "$out"
+          sha256sum "$out" > "${out}.sha256"
+          echo "apk=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK to release
+        working-directory: mobile
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "${{ steps.apk.outputs.apk }}" \
+            "${{ steps.apk.outputs.apk }}.sha256" \
+            --clobber
