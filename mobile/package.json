@@ -8,7 +8,13 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "check": "oxfmt --check && oxlint && tsc --noEmit",
+    "fix": "oxfmt && oxlint --fix"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "1.23.1",
@@ -27,6 +33,8 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~18.2.79",
+    "oxfmt": "^0.45.0",
+    "oxlint": "^1.60.0",
     "typescript": "~5.3.3"
   }
 }

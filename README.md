@@ -71,8 +71,11 @@ gh release create server-v0.1.0 --generate-notes --title "aura-server v0.1.0"
 gh release create mobile-v0.1.0 --generate-notes --title "aura mobile v0.1.0"
 ```
 
-Pull requests and pushes to `main` run the `ci` workflow: `go vet / go
-test` for the server and `tsc --noEmit` for the mobile app.
+Pull requests and pushes to `main` run the `ci` workflow: `golangci-lint
+run`, `golangci-lint fmt --diff`, `go test -race` for the server, and
+`oxfmt --check`, `oxlint`, `tsc --noEmit` for the mobile app. Run the
+same checks locally with `make check`; `make fix` auto-applies
+formatting and safe lint fixes.
 
 ## Required secrets
 

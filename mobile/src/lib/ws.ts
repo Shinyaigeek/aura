@@ -20,9 +20,7 @@ export type WsClientCallbacks = {
   onText?: (text: string) => void;
 };
 
-export type ControlMessage =
-  | { type: "resize"; rows: number; cols: number }
-  | { type: "ping" };
+export type ControlMessage = { type: "resize"; rows: number; cols: number } | { type: "ping" };
 
 const MAX_BACKOFF_MS = 30_000;
 
@@ -77,10 +75,10 @@ export class WsClient {
       return;
     }
     // React Native's WebSocket accepts ArrayBuffer.
-    const ab = data instanceof ArrayBuffer ? data : data.buffer.slice(
-      data.byteOffset,
-      data.byteOffset + data.byteLength,
-    );
+    const ab =
+      data instanceof ArrayBuffer
+        ? data
+        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     this.ws.send(ab);
   }
 

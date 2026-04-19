@@ -49,10 +49,7 @@ export default function TerminalScreen({ navigation }: Props) {
         <Pressable
           onPress={() => navigation.navigate("Settings")}
           hitSlop={10}
-          style={({ pressed }) => [
-            styles.headerIconButton,
-            pressed && { opacity: 0.55 },
-          ]}
+          style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
         >
           <Text style={styles.headerIcon}>⚙</Text>
         </Pressable>
@@ -75,9 +72,7 @@ export default function TerminalScreen({ navigation }: Props) {
       offset += f.byteLength;
     }
     const b64 = bytesToBase64(merged);
-    webRef.current?.injectJavaScript(
-      `window.__auraWrite(${JSON.stringify(b64)});true;`,
-    );
+    webRef.current?.injectJavaScript(`window.__auraWrite(${JSON.stringify(b64)});true;`);
   }, []);
 
   useEffect(() => {
@@ -138,17 +133,12 @@ export default function TerminalScreen({ navigation }: Props) {
     // 'R' = ready
     if (prefix === 82) {
       webReadyRef.current = true;
-      webRef.current?.injectJavaScript(
-        "window.__auraFit();window.__auraFocus();true;",
-      );
+      webRef.current?.injectJavaScript("window.__auraFit();window.__auraFocus();true;");
       return;
     }
   }, []);
 
-  const source = useMemo(
-    () => ({ html: terminalHtml, baseUrl: "https://aura.local/" }),
-    [],
-  );
+  const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);
 
   if (!cfg || !cfg.url || !cfg.token) {
     return (
@@ -161,10 +151,7 @@ export default function TerminalScreen({ navigation }: Props) {
           </Text>
           <Pressable
             onPress={() => navigation.navigate("Settings")}
-            style={({ pressed }) => [
-              styles.primaryButton,
-              pressed && styles.primaryButtonPressed,
-            ]}
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
           >
             <Text style={styles.primaryButtonText}>Set up connection</Text>
           </Pressable>

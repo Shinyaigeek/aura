@@ -21,13 +21,17 @@ jobs:
         with:
           node-version: "20"
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Install deps
-        run: npm install --no-audit --no-fund
+        run: bun install --frozen-lockfile
 
       - name: Expo prebuild (android)
         run: npx expo prebuild --platform android --no-install --non-interactive

@@ -55,10 +55,7 @@ export default function SettingsScreen({ navigation }: Props) {
 
   if (!loaded) return <View style={styles.container} />;
 
-  const inputStyle = (key: FieldKey) => [
-    styles.input,
-    focused === key && styles.inputFocused,
-  ];
+  const inputStyle = (key: FieldKey) => [styles.input, focused === key && styles.inputFocused];
 
   return (
     <KeyboardAvoidingView
@@ -73,8 +70,7 @@ export default function SettingsScreen({ navigation }: Props) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Connection</Text>
           <Text style={styles.cardSubtitle}>
-            Point the app at your aura-server and authenticate with the shared
-            token.
+            Point the app at your aura-server and authenticate with the shared token.
           </Text>
 
           <View style={styles.field}>
@@ -92,8 +88,7 @@ export default function SettingsScreen({ navigation }: Props) {
               onBlur={() => setFocused(null)}
             />
             <Text style={styles.hint}>
-              Omit the /ws path — the app appends it. Use wss:// over the
-              internet.
+              Omit the /ws path — the app appends it. Use wss:// over the internet.
             </Text>
           </View>
 
@@ -127,18 +122,15 @@ export default function SettingsScreen({ navigation }: Props) {
               onBlur={() => setFocused(null)}
             />
             <Text style={styles.hint}>
-              Selects which long-lived tmux session to attach to. Change this
-              to run several in parallel.
+              Selects which long-lived tmux session to attach to. Change this to run several in
+              parallel.
             </Text>
           </View>
         </View>
 
         <Pressable
           onPress={onSave}
-          style={({ pressed }) => [
-            styles.saveButton,
-            pressed && styles.saveButtonPressed,
-          ]}
+          style={({ pressed }) => [styles.saveButton, pressed && styles.saveButtonPressed]}
         >
           <Text style={styles.saveButtonText}>Save & connect</Text>
         </Pressable>
