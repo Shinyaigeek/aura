@@ -1,0 +1,55 @@
+# aura-server
+
+Go HTTP/WebSocket server that owns long-lived tmux sessions and bridges
+PTY I/O to mobile clients. Replaces `ghostty-web`.
+
+## Build
+
+```sh
+cd server
+go mod tidy
+go build -o bin/aura-server ./cmd/aura-server
+```
+
+## Run
+
+Requires `tmux` on the host.
+
+```sh
+export AURA_TOKEN=$(openssl rand -hex 32)
+./bin/aura-server -addr :8787
+```
+
+## Endpoints
+
+- `GET /healthz` — liveness probe.
+- `GET /ws?session=<id>` — WebSocket upgrade. Auth via `Authorization:
+  Bearer <token>`, `?token=<token>`, or the `bearer.<token>`
+  subprotocol.
+
+The `session` query param picks which tmux session to attach to. If
+omitted, `default` is used. The session is created on first attach and
+**survives** all subsequent disconnects.
+
+## Install as a systemd service
+
+```sh
+sudo install -m 0755 bin/aura-server /usr/local/bin/aura-server
+sudo install -m 0644 deploy/aura-server.service /etc/systemd/system/aura-server.service
+sudo install -d -m 0750 /etc/aura
+sudo install -m 0640 deploy/aura.env.example /etc/aura/aura.env
+sudoedit /etc/aura/aura.env   # set AURA_TOKEN
+sudo systemctl daemon-reload
+sudo systemctl enable --now aura-server
+```
+
+## Migrating from ghostty-web
+
+1. Disable the existing ghostty-web service:
+   `sudo systemctl disable --now ghostty-web`
+2. Install aura-server as above.
+3. Point the mobile app (or a browser with a WS-capable terminal) at
+   `ws://<desktop>:8787/ws?session=default`.
+4. Because aura-server wraps tmux, you can ssh in and run
+   `tmux attach -t aura-default` from any shell to share the same
+   session.

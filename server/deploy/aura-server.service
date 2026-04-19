@@ -1,0 +1,28 @@
+[Unit]
+Description=aura-server — persistent terminal multiplexer for Claude Code
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust User / WorkingDirectory to your setup.
+User=s9k
+WorkingDirectory=/home/s9k
+EnvironmentFile=/etc/aura/aura.env
+ExecStart=/usr/local/bin/aura-server -addr :8787
+Restart=on-failure
+RestartSec=2s
+
+# aura-server spawns tmux, which wants its own process session.
+KillMode=control-group
+TimeoutStopSec=10s
+
+# Hardening — relax if something breaks.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/s9k /tmp
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
