@@ -7,6 +7,10 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#0b0b0b",
+      "resizeMode": "contain"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "dev.shinyaigeek.aura",
@@ -18,8 +22,20 @@
       "package": "dev.shinyaigeek.aura",
       "adaptiveIcon": {
         "backgroundColor": "#0b0b0b"
+      },
+      "splash": {
+        "backgroundColor": "#0b0b0b",
+        "resizeMode": "contain"
       }
     },
-    "plugins": []
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0b0b0b",
+          "resizeMode": "contain"
+        }
+      ]
+    ]
   }
 }
