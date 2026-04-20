@@ -11,9 +11,11 @@ import (
 )
 
 // auraStopCommand is the shell one-liner installed as Claude Code's Stop
-// hook. It posts the pane's AURA_SESSION_ID back to aura-server so the server
-// can fan a push notification out to registered mobile devices. Every guard
-// is intentional:
+// hook. Claude Code pipes its native hook-event JSON (including
+// transcript_path) into the hook process's stdin, so we forward that
+// straight through to aura-server via `--data-binary @-` and identify the
+// originating tmux pane with an `X-Aura-Session-Id` header. Every guard is
+// intentional:
 //
 //   - The `[ -n "$AURA_URL" ] && [ -n "$AURA_SESSION_ID" ]` pair makes the
 //     hook a no-op when Claude Code runs outside an aura-provisioned tmux
@@ -24,7 +26,7 @@ import (
 //   - `# aura-hook` is the idempotency marker setup-hooks looks for on
 //     re-runs so it can replace the entry in place instead of appending a
 //     duplicate.
-const auraStopCommand = `([ -n "$AURA_URL" ] && [ -n "$AURA_SESSION_ID" ] && curl -sS -m 5 -X POST -H "Authorization: Bearer $AURA_TOKEN" -H 'Content-Type: application/json' -d "{\"sessionId\":\"$AURA_SESSION_ID\"}" "$AURA_URL/hooks/stop") >/dev/null 2>&1 || true # aura-hook`
+const auraStopCommand = `([ -n "$AURA_URL" ] && [ -n "$AURA_SESSION_ID" ] && curl -sS -m 5 -X POST -H "Authorization: Bearer $AURA_TOKEN" -H "Content-Type: application/json" -H "X-Aura-Session-Id: $AURA_SESSION_ID" --data-binary @- "$AURA_URL/hooks/stop") >/dev/null 2>&1 || true # aura-hook`
 
 const auraHookMarker = "# aura-hook"
 

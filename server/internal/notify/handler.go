@@ -18,9 +18,20 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Shinyaigeek/aura/server/internal/ccmeta"
 	"github.com/Shinyaigeek/aura/server/internal/devices"
 	"github.com/Shinyaigeek/aura/server/internal/push"
 )
+
+// CwdLookup resolves an aura session id to the cwd of its tmux pane. Broken
+// out as an interface so tests don't have to shell out to tmux.
+type CwdLookup func(sessionID string) (string, error)
+
+// TitleReader abstracts ccmeta.Cache so tests can stub the filesystem.
+type TitleReader interface {
+	LookupByCwd(cwd string) (ccmeta.Meta, error)
+	ReadPath(path string) (ccmeta.Meta, error)
+}
 
 // Pusher is the subset of *push.Client this package needs. Kept as an
 // interface so tests can swap in a fake without hitting Expo.
@@ -63,14 +74,20 @@ func NewRegisterHandler(store Registrar) http.Handler {
 
 // NewStopHookHandler handles POST /hooks/stop.
 //
-// The body is intentionally permissive: the shell-side hook script may POST
-// the raw Claude Code event JSON, or a slim {sessionId, title, body} shape.
-// We only read what we need and ignore the rest.
-func NewStopHookHandler(store Registrar, pusher Pusher) http.Handler {
+// Accepts both the legacy slim shape ({sessionId, title, body}) and CC's
+// native hook payload (which carries transcript_path). When a transcript
+// path arrives and we can read a first user message from it, that prompt
+// becomes the push-notification body — way more useful than "Session X is
+// ready".
+//
+// titles is nil-safe: if the caller doesn't wire up a TitleReader the
+// handler falls back to the legacy behaviour.
+func NewStopHookHandler(store Registrar, pusher Pusher, titles TitleReader) http.Handler {
 	type body struct {
-		SessionID string `json:"sessionId"`
-		Title     string `json:"title"`
-		Body      string `json:"body"`
+		SessionID      string `json:"sessionId"`
+		Title          string `json:"title"`
+		Body           string `json:"body"`
+		TranscriptPath string `json:"transcript_path"`
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var in body
@@ -78,12 +95,22 @@ func NewStopHookHandler(store Registrar, pusher Pusher) http.Handler {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		sessionID := strings.TrimSpace(in.SessionID)
+		// Prefer the explicit header (set by the updated hook command) over
+		// the body field, which is only there for the old shell one-liner.
+		sessionID := strings.TrimSpace(r.Header.Get("X-Aura-Session-Id"))
+		if sessionID == "" {
+			sessionID = strings.TrimSpace(in.SessionID)
+		}
 		title := strings.TrimSpace(in.Title)
 		if title == "" {
 			title = "Claude Code"
 		}
 		msgBody := strings.TrimSpace(in.Body)
+		if msgBody == "" && titles != nil && in.TranscriptPath != "" {
+			if m, err := titles.ReadPath(in.TranscriptPath); err == nil && m.Title != "" {
+				msgBody = m.Title
+			}
+		}
 		if msgBody == "" {
 			if sessionID != "" {
 				msgBody = "Session " + sessionID + " is ready"
@@ -129,4 +156,42 @@ func NewStopHookHandler(store Registrar, pusher Pusher) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// NewMetaHandler handles GET /sessions/{id}/meta. Returns the title derived
+// from the Claude Code transcript associated with the tmux pane's current
+// cwd, plus the cwd itself. Everything is best-effort — clients should
+// treat an empty response as "no data yet", not an error.
+func NewMetaHandler(cwdLookup CwdLookup, titles TitleReader) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "" {
+			http.Error(w, "missing session id", http.StatusBadRequest)
+			return
+		}
+
+		cwd, err := cwdLookup(id)
+		if err != nil {
+			// Session not running in tmux (yet). Respond with empty meta so
+			// the client has something to render without special-casing a
+			// 404 vs empty result distinction.
+			writeJSON(w, ccmeta.Meta{})
+			return
+		}
+
+		meta, err := titles.LookupByCwd(cwd)
+		if err != nil {
+			slog.Warn("ccmeta lookup failed", "id", id, "cwd", cwd, "err", err)
+			writeJSON(w, ccmeta.Meta{Cwd: cwd})
+			return
+		}
+		writeJSON(w, meta)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("write json failed", "err", err)
+	}
 }

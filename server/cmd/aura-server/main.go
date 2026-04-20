@@ -16,10 +16,12 @@ import (
 	"time"
 
 	"github.com/Shinyaigeek/aura/server/internal/auth"
+	"github.com/Shinyaigeek/aura/server/internal/ccmeta"
 	"github.com/Shinyaigeek/aura/server/internal/devices"
 	"github.com/Shinyaigeek/aura/server/internal/notify"
 	"github.com/Shinyaigeek/aura/server/internal/push"
 	"github.com/Shinyaigeek/aura/server/internal/session"
+	"github.com/Shinyaigeek/aura/server/internal/tmux"
 	"github.com/Shinyaigeek/aura/server/internal/ws"
 )
 
@@ -80,6 +82,8 @@ func main() {
 		os.Exit(1)
 	}
 	pushClient := push.NewClient()
+	titles := ccmeta.NewCache()
+	cwdLookup := func(id string) (string, error) { return tmux.PaneCurrentPath(id) }
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -88,8 +92,9 @@ func main() {
 	})
 	mux.Handle("GET /ws", authMw(ws.NewHandler(mgr)))
 	mux.Handle("DELETE /sessions/{id}", authMw(ws.NewKillHandler(mgr)))
+	mux.Handle("GET /sessions/{id}/meta", authMw(notify.NewMetaHandler(cwdLookup, titles)))
 	mux.Handle("POST /devices/register", authMw(notify.NewRegisterHandler(devStore)))
-	mux.Handle("POST /hooks/stop", authMw(notify.NewStopHookHandler(devStore, pushClient)))
+	mux.Handle("POST /hooks/stop", authMw(notify.NewStopHookHandler(devStore, pushClient, titles)))
 
 	srv := &http.Server{
 		Addr:              *addr,

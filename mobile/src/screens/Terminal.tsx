@@ -29,6 +29,7 @@ import {
   type TabsState,
 } from "@/lib/storage";
 import { subscribePushTap, usePushRegistration } from "@/lib/push";
+import { useSessionMetaMap, type SessionMeta } from "@/lib/session-meta";
 import { terminalHtml } from "@/lib/terminal-html";
 import { WsClient, type WsStatus } from "@/lib/ws";
 import DirectoryBrowser from "./DirectoryBrowser";
@@ -58,6 +59,9 @@ export default function TerminalScreen({ navigation }: Props) {
   }, []);
 
   usePushRegistration(cfg);
+
+  const tabIds = useMemo(() => tabsState?.tabs.map((t) => t.id) ?? [], [tabsState]);
+  const metaMap = useSessionMetaMap(cfg, tabIds);
 
   // Tapping a CC completion notification should jump to the matching tab. If
   // that tab was closed in the UI (server session still alive), recreate it
@@ -212,6 +216,7 @@ export default function TerminalScreen({ navigation }: Props) {
         tabs={tabsState.tabs}
         activeTabId={tabsState.activeTabId}
         statuses={statuses}
+        metaMap={metaMap}
         onSelect={selectTab}
         onClose={closeTab}
         onAdd={addTab}
@@ -433,12 +438,13 @@ type TabBarProps = {
   tabs: readonly Tab[];
   activeTabId: string;
   statuses: Record<string, WsStatus>;
+  metaMap: Record<string, SessionMeta>;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onAdd: () => void;
 };
 
-function TabBar({ tabs, activeTabId, statuses, onSelect, onClose, onAdd }: TabBarProps) {
+function TabBar({ tabs, activeTabId, statuses, metaMap, onSelect, onClose, onAdd }: TabBarProps) {
   return (
     <View style={styles.tabBar}>
       <ScrollView
@@ -450,6 +456,8 @@ function TabBar({ tabs, activeTabId, statuses, onSelect, onClose, onAdd }: TabBa
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           const status = statuses[tab.id] ?? "closed";
+          const title = metaMap[tab.id]?.title?.trim();
+          const label = title && title.length > 0 ? title : tab.label;
           return (
             <Pressable
               key={tab.id}
@@ -465,7 +473,7 @@ function TabBar({ tabs, activeTabId, statuses, onSelect, onClose, onAdd }: TabBa
                 style={[styles.tabPillText, isActive && styles.tabPillTextActive]}
                 numberOfLines={1}
               >
-                {tab.label}
+                {label}
               </Text>
               <Pressable
                 onPress={() => onClose(tab.id)}
