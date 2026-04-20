@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +24,24 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch. Keep this surface minimal: the server is the
+	// only long-running mode, side-commands (setup-hooks, etc.) are small
+	// helpers that run once and exit.
+	if len(os.Args) >= 2 && !strings.HasPrefix(os.Args[1], "-") {
+		sub, rest := os.Args[1], os.Args[2:]
+		switch sub {
+		case "setup-hooks":
+			if err := runSetupHooks(rest); err != nil {
+				fmt.Fprintln(os.Stderr, "setup-hooks:", err)
+				os.Exit(1)
+			}
+			return
+		default:
+			fmt.Fprintln(os.Stderr, "unknown subcommand:", sub)
+			os.Exit(2)
+		}
+	}
+
 	var (
 		addr        = flag.String("addr", ":8787", "listen address")
 		token       = flag.String("token", os.Getenv("AURA_TOKEN"), "shared auth token (env AURA_TOKEN)")

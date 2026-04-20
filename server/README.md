@@ -26,10 +26,32 @@ export AURA_TOKEN=$(openssl rand -hex 32)
 - `GET /ws?session=<id>` — WebSocket upgrade. Auth via `Authorization:
   Bearer <token>`, `?token=<token>`, or the `bearer.<token>`
   subprotocol.
+- `DELETE /sessions/<id>` — terminates a tmux session.
+- `POST /devices/register` — registers a mobile Expo push token.
+- `POST /hooks/stop` — Claude Code Stop-hook callback; fans a push
+  notification out to every registered device.
 
 The `session` query param picks which tmux session to attach to. If
 omitted, `default` is used. The session is created on first attach and
 **survives** all subsequent disconnects.
+
+## Claude Code notifications
+
+aura-server injects `AURA_SESSION_ID`, `AURA_URL`, and `AURA_TOKEN`
+into every tmux pane it spawns, so a Claude Code Stop hook running in
+that pane can call back into the server without any extra config.
+
+Wire the hook into `~/.claude/settings.json` once:
+
+```sh
+aura-server setup-hooks
+```
+
+The subcommand patches `~/.claude/settings.json` (creating it if
+missing) to install an idempotent Stop hook tagged with `# aura-hook`.
+Re-running the command replaces the existing entry in place rather
+than appending a duplicate. Pass `-dry-run` to preview the result, or
+`-file <path>` to target a different settings file.
 
 ## Install as a systemd service
 
