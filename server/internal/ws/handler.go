@@ -1,18 +1,26 @@
 // Package ws exposes the WebSocket endpoint that bridges client I/O to a
 // tmux-backed PTY.
 //
-// Wire protocol (deliberately minimal):
+// Wire protocol:
 //
 //   - Binary frames from client → server: raw stdin bytes for the PTY.
 //   - Binary frames from server → client: raw stdout bytes from the PTY.
 //   - Text frames from client → server: JSON control messages.
+//   - Text frames from server → client: JSON response messages (correlated
+//     with requests by id).
 //
-// Control messages:
+// Client → server control messages:
 //
 //	{"type":"resize","rows":40,"cols":120}
+//	{"type":"ping"}
+//	{"type":"cwd","id":"r1"}
+//	{"type":"listdir","id":"r2","path":"/home/user"}
 //
-// Text frames from server → client are reserved for future control messages
-// (e.g. session id handshake) and are currently unused.
+// Server → client responses:
+//
+//	{"type":"cwd_response","id":"r1","path":"/home/user/project"}
+//	{"type":"listdir_response","id":"r2","path":"/home/user","entries":[{"name":"src","isDir":true}]}
+//	{"type":"error","id":"r2","message":"..."}
 package ws
 
 import (
@@ -22,11 +30,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/Shinyaigeek/aura/server/internal/session"
+	"github.com/Shinyaigeek/aura/server/internal/tmux"
 )
 
 type Manager interface {
@@ -123,7 +133,11 @@ func NewHandler(mgr Manager) http.Handler {
 					return
 				}
 			case websocket.MessageText:
-				handleControl(sess, data)
+				// Copy the frame: `data` is only valid until the next Read.
+				// Dispatch off-loop so slow handlers (tmux exec, filesystem
+				// reads) don't stall PTY input.
+				payload := append([]byte(nil), data...)
+				go handleControl(ctx, conn, sess, payload)
 			}
 		}
 	})
@@ -131,11 +145,32 @@ func NewHandler(mgr Manager) http.Handler {
 
 type controlMsg struct {
 	Type string `json:"type"`
+	ID   string `json:"id,omitempty"`
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`
+	Path string `json:"path,omitempty"`
 }
 
-func handleControl(sess *session.Session, raw []byte) {
+type cwdResponse struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
+type listdirResponse struct {
+	Type    string     `json:"type"`
+	ID      string     `json:"id"`
+	Path    string     `json:"path"`
+	Entries []dirEntry `json:"entries"`
+}
+
+type errorResponse struct {
+	Type    string `json:"type"`
+	ID      string `json:"id,omitempty"`
+	Message string `json:"message"`
+}
+
+func handleControl(ctx context.Context, conn *websocket.Conn, sess *session.Session, raw []byte) {
 	var msg controlMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return
@@ -147,6 +182,36 @@ func handleControl(sess *session.Session, raw []byte) {
 		}
 	case "ping":
 		// no-op; existence of the read is enough to reset idle timers.
+	case "cwd":
+		path, err := tmux.PaneCurrentPath(sess.ID)
+		if err != nil {
+			writeJSON(ctx, conn, errorResponse{Type: "error", ID: msg.ID, Message: err.Error()})
+			return
+		}
+		writeJSON(ctx, conn, cwdResponse{Type: "cwd_response", ID: msg.ID, Path: path})
+	case "listdir":
+		entries, err := listDirectories(msg.Path)
+		if err != nil {
+			writeJSON(ctx, conn, errorResponse{Type: "error", ID: msg.ID, Message: err.Error()})
+			return
+		}
+		writeJSON(ctx, conn, listdirResponse{
+			Type:    "listdir_response",
+			ID:      msg.ID,
+			Path:    filepath.Clean(msg.Path),
+			Entries: entries,
+		})
+	}
+}
+
+func writeJSON(ctx context.Context, conn *websocket.Conn, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("marshal response failed", "err", err)
+		return
+	}
+	if err := conn.Write(ctx, websocket.MessageText, b); err != nil {
+		slog.Debug("ws text write failed", "err", err)
 	}
 }
 

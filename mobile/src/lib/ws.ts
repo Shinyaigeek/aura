@@ -22,13 +22,34 @@ export type WsClientCallbacks = {
 
 export type ControlMessage = { type: "resize"; rows: number; cols: number } | { type: "ping" };
 
+export type DirEntry = { name: string; isDir: boolean };
+
+export type RequestMessage = { type: "cwd" } | { type: "listdir"; path: string };
+
+export type CwdResponse = { type: "cwd_response"; id: string; path: string };
+export type ListdirResponse = {
+  type: "listdir_response";
+  id: string;
+  path: string;
+  entries: DirEntry[];
+};
+
+type Pending = {
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 const MAX_BACKOFF_MS = 30_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 
 export class WsClient {
   private ws: WebSocket | null = null;
   private closedByUser = false;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pending = new Map<string, Pending>();
+  private nextRequestId = 1;
 
   constructor(
     private readonly cfg: ServerConfig,
@@ -55,6 +76,7 @@ export class WsClient {
       }
       this.ws = null;
     }
+    this.rejectAllPending(new Error("stopped"));
     this.cb.onStatus("closed");
   }
 
@@ -92,6 +114,71 @@ export class WsClient {
     this.ws.send(JSON.stringify(msg));
   }
 
+  /** Send a request and await its correlated response. Rejects on timeout,
+   * transport close, or server-side error frame. */
+  request<T>(msg: RequestMessage, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error("not connected"));
+        return;
+      }
+      const id = `r${this.nextRequestId++}`;
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) reject(new Error("timeout"));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        timer,
+      });
+      try {
+        this.ws.send(JSON.stringify({ ...msg, id }));
+      } catch (e) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    });
+  }
+
+  private rejectAllPending(err: Error): void {
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
+    this.pending.clear();
+  }
+
+  private dispatchText(text: string): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      this.cb.onText?.(text);
+      return;
+    }
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "id" in parsed &&
+      typeof (parsed as { id: unknown }).id === "string"
+    ) {
+      const msg = parsed as { id: string; type?: string; message?: string };
+      const p = this.pending.get(msg.id);
+      if (p) {
+        this.pending.delete(msg.id);
+        clearTimeout(p.timer);
+        if (msg.type === "error") {
+          p.reject(new Error(msg.message ?? "server error"));
+        } else {
+          p.resolve(parsed);
+        }
+        return;
+      }
+    }
+    this.cb.onText?.(text);
+  }
+
   private connect(): void {
     this.cb.onStatus("connecting");
 
@@ -110,7 +197,7 @@ export class WsClient {
     ws.onmessage = (event: WebSocketMessageEvent) => {
       const data = event.data;
       if (typeof data === "string") {
-        this.cb.onText?.(data);
+        this.dispatchText(data);
       } else if (data instanceof ArrayBuffer) {
         this.cb.onBinary(data);
       }
@@ -118,6 +205,7 @@ export class WsClient {
 
     ws.onclose = () => {
       this.ws = null;
+      this.rejectAllPending(new Error("connection closed"));
       this.cb.onStatus("closed");
       if (!this.closedByUser) this.scheduleReconnect();
     };

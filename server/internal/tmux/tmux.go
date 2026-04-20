@@ -59,3 +59,17 @@ func EnsureArgs(id, shell string) []string {
 func KillArgs(id string) []string {
 	return []string{"kill-session", "-t", SessionName(id)}
 }
+
+// PaneCurrentPath asks tmux for the working directory of the (single) pane in
+// the given logical session. Used by the mobile directory browser so the user
+// can start navigation from where the shell currently is rather than $HOME.
+func PaneCurrentPath(id string) (string, error) {
+	cmd := exec.Command("tmux", "display-message", "-p", "-t", SessionName(id), "#{pane_current_path}")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("tmux display-message: %w: %s", err, stderr.String())
+	}
+	return strings.TrimRight(stdout.String(), "\n"), nil
+}

@@ -6,6 +6,7 @@ import {
   Alert,
   AppState,
   type AppStateStatus,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -29,6 +30,7 @@ import {
 } from "@/lib/storage";
 import { terminalHtml } from "@/lib/terminal-html";
 import { WsClient, type WsStatus } from "@/lib/ws";
+import DirectoryBrowser from "./DirectoryBrowser";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Terminal">;
 
@@ -43,6 +45,16 @@ export default function TerminalScreen({ navigation }: Props) {
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
   const [tabsState, setTabsState] = useState<TabsState | null>(null);
   const [statuses, setStatuses] = useState<Record<string, WsStatus>>({});
+  const [browserOpen, setBrowserOpen] = useState(false);
+
+  // Shared per-tab WsClient registry: TabView registers its client on mount so
+  // TerminalScreen-level UI (the directory browser) can reach the active tab's
+  // socket without lifting the whole TabView state up.
+  const clientsRef = useRef<Record<string, WsClient>>({});
+  const registerClient = useCallback((id: string, client: WsClient | null) => {
+    if (client) clientsRef.current[id] = client;
+    else delete clientsRef.current[id];
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -71,13 +83,22 @@ export default function TerminalScreen({ navigation }: Props) {
     navigation.setOptions({
       headerTitle: () => <HeaderTitle status={activeStatus} />,
       headerRight: () => (
-        <Pressable
-          onPress={() => navigation.navigate("Settings")}
-          hitSlop={10}
-          style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
-        >
-          <Text style={styles.headerIcon}>⚙</Text>
-        </Pressable>
+        <View style={styles.headerRightGroup}>
+          <Pressable
+            onPress={() => setBrowserOpen(true)}
+            hitSlop={10}
+            style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
+          >
+            <Text style={styles.headerIcon}>▤</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => navigation.navigate("Settings")}
+            hitSlop={10}
+            style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
+          >
+            <Text style={styles.headerIcon}>⚙</Text>
+          </Pressable>
+        </View>
       ),
     });
   }, [navigation, activeStatus]);
@@ -180,12 +201,36 @@ export default function TerminalScreen({ navigation }: Props) {
             tab={tab}
             active={tab.id === tabsState.activeTabId}
             onStatus={handleStatus}
+            registerClient={registerClient}
           />
         ))}
       </View>
       {activeStatus !== "open" && <OfflineBanner status={activeStatus} />}
+
+      <Modal
+        visible={browserOpen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setBrowserOpen(false)}
+      >
+        <DirectoryBrowser
+          client={clientsRef.current[tabsState.activeTabId] ?? null}
+          onClose={() => setBrowserOpen(false)}
+          onPick={(path) => {
+            const client = clientsRef.current[tabsState.activeTabId];
+            if (client) client.sendInput(`cd ${shellQuote(path)}\r`);
+            setBrowserOpen(false);
+          }}
+        />
+      </Modal>
     </View>
   );
+}
+
+// POSIX single-quote shell quoting. Single quotes cannot appear inside single
+// quotes, so split on them: `'...'\''...'`.
+function shellQuote(s: string): string {
+  return "'" + s.replaceAll("'", "'\\''") + "'";
 }
 
 type TabViewProps = {
@@ -193,6 +238,7 @@ type TabViewProps = {
   tab: Tab;
   active: boolean;
   onStatus: (id: string, status: WsStatus) => void;
+  registerClient: (id: string, client: WsClient | null) => void;
 };
 
 // One tab = one WebSocket + one WebView (with its own xterm.js instance).
@@ -200,7 +246,7 @@ type TabViewProps = {
 // xterm buffer survive tab switches. The WebSocket, in contrast, is dropped
 // after IDLE_DETACH_MS of being non-active — the server's tmux session keeps
 // running regardless.
-function TabView({ cfg, tab, active, onStatus }: TabViewProps) {
+function TabView({ cfg, tab, active, onStatus, registerClient }: TabViewProps) {
   const webRef = useRef<WebView | null>(null);
   const clientRef = useRef<WsClient | null>(null);
   const webReadyRef = useRef(false);
@@ -241,6 +287,7 @@ function TabView({ cfg, tab, active, onStatus }: TabViewProps) {
       },
     });
     clientRef.current = client;
+    registerClient(tab.id, client);
 
     return () => {
       if (idleTimerRef.current) {
@@ -248,11 +295,12 @@ function TabView({ cfg, tab, active, onStatus }: TabViewProps) {
         idleTimerRef.current = null;
       }
       client.stop();
+      registerClient(tab.id, null);
       clientRef.current = null;
       pendingFramesRef.current = [];
       webReadyRef.current = false;
     };
-  }, [cfg, tab.id, onStatus, flushPending]);
+  }, [cfg, tab.id, onStatus, flushPending, registerClient]);
 
   // React to active-state changes. Becoming active clears the idle timer and
   // kicks a reconnect if needed; becoming inactive starts the countdown.
@@ -551,6 +599,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
   },
 
+  headerRightGroup: { flexDirection: "row", alignItems: "center" },
   headerIconButton: {
     paddingHorizontal: 10,
     paddingVertical: 4,
