@@ -315,10 +315,22 @@ function TabView({ cfg, tab, active, onStatus, registerClient }: TabViewProps) {
       client.kick();
       if (webReadyRef.current) {
         // Re-fit in case viewport dimensions changed while hidden (keyboard,
-        // rotation), and refocus so keystrokes land immediately.
+        // rotation), and refocus so keystrokes land immediately. The retry
+        // covers the race where the first focus fires before the native
+        // WebView has regained focus after the tab became visible.
         webRef.current?.injectJavaScript("window.__auraFit();window.__auraFocus();true;");
+        const retry = setTimeout(() => {
+          webRef.current?.injectJavaScript("window.__auraFocus();true;");
+        }, 120);
+        return () => clearTimeout(retry);
       }
     } else {
+      // Release focus so the OS keyboard detaches from this WebView's hidden
+      // textarea before the tab goes offscreen; otherwise iOS keeps routing
+      // IME composition into it, which paints over the now-visible tab.
+      if (webReadyRef.current) {
+        webRef.current?.injectJavaScript("window.__auraBlur();true;");
+      }
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       idleTimerRef.current = setTimeout(() => {
         idleTimerRef.current = null;
@@ -505,7 +517,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0f" },
   terminalWrap: { flex: 1, position: "relative" },
   tabView: { ...StyleSheet.absoluteFillObject },
-  tabViewHidden: { display: "none" },
+  // Hide with opacity rather than display:none so the native WebView stays
+  // laid out and keeps its focus plumbing intact across tab switches. Touches
+  // are already gated via pointerEvents on the wrapping View.
+  tabViewHidden: { opacity: 0 },
   web: { flex: 1, backgroundColor: "#0b0b0f" },
 
   tabBar: {

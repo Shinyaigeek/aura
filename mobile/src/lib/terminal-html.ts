@@ -99,7 +99,29 @@ export const terminalHtml = `<!doctype html>
     };
     window.__auraFit = sendResize;
     window.__auraClear = function () { term.clear(); };
-    window.__auraFocus = function () { term.focus(); };
+    // Focus the helper textarea directly as well as calling term.focus(). On
+    // tab switches, term.focus() alone sometimes leaves the hidden textarea
+    // unfocused — the native WebView has just regained focus and xterm's
+    // focus delegation races the layout pass. Touching the textarea directly
+    // is idempotent and cheap.
+    window.__auraFocus = function () {
+      try {
+        term.focus();
+        var ta = document.querySelector('.xterm-helper-textarea');
+        if (ta && document.activeElement !== ta) ta.focus();
+      } catch (e) {}
+    };
+    // Explicitly release focus before a tab goes offscreen so the OS keyboard
+    // detaches from this WebView. Without this, the iOS keyboard may keep
+    // delivering IME composition to the hidden textarea, which renders on top
+    // of the now-visible tab.
+    window.__auraBlur = function () {
+      try {
+        var ta = document.querySelector('.xterm-helper-textarea');
+        if (ta && typeof ta.blur === 'function') ta.blur();
+        term.blur();
+      } catch (e) {}
+    };
 
     window.addEventListener('resize', sendResize);
 
