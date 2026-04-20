@@ -44,13 +44,20 @@ func Exists(id string) (bool, error) {
 // create." This is the single operation that makes the reattach path safe
 // against races: two clients connecting simultaneously both land in the same
 // session.
-func EnsureArgs(id, shell string) []string {
-	return []string{
-		"new-session",
-		"-A",
-		"-s", SessionName(id),
-		shell,
+//
+// `env` entries (KEY=VALUE) are passed as tmux `-e` flags so they live in the
+// session environment; they are only honored when the session is actually
+// created, not on a plain attach.
+func EnsureArgs(id, shell string, env ...string) []string {
+	args := []string{"new-session", "-A"}
+	for _, kv := range env {
+		if kv == "" {
+			continue
+		}
+		args = append(args, "-e", kv)
 	}
+	args = append(args, "-s", SessionName(id), shell)
+	return args
 }
 
 // KillArgs returns argv to terminate a session explicitly. Normally we never

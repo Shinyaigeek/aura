@@ -5,22 +5,28 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/Shinyaigeek/aura/server/internal/auth"
+	"github.com/Shinyaigeek/aura/server/internal/devices"
+	"github.com/Shinyaigeek/aura/server/internal/notify"
+	"github.com/Shinyaigeek/aura/server/internal/push"
 	"github.com/Shinyaigeek/aura/server/internal/session"
 	"github.com/Shinyaigeek/aura/server/internal/ws"
 )
 
 func main() {
 	var (
-		addr  = flag.String("addr", ":8787", "listen address")
-		token = flag.String("token", os.Getenv("AURA_TOKEN"), "shared auth token (env AURA_TOKEN)")
-		shell = flag.String("shell", defaultShell(), "shell to run inside tmux when a new session is created")
+		addr        = flag.String("addr", ":8787", "listen address")
+		token       = flag.String("token", os.Getenv("AURA_TOKEN"), "shared auth token (env AURA_TOKEN)")
+		shell       = flag.String("shell", defaultShell(), "shell to run inside tmux when a new session is created")
+		devicesFile = flag.String("devices-file", defaultDevicesFile(), "path to device registry JSON file")
 	)
 	flag.Parse()
 
@@ -32,7 +38,28 @@ func main() {
 	}
 
 	mgr := session.NewManager(*shell)
+	// Expose AURA_SESSION_ID / AURA_URL / AURA_TOKEN to each spawned shell so
+	// a Claude Code Stop hook (which runs as a subprocess of that shell) can
+	// POST back here without needing to know anything about the server.
+	hookURL := hookCallbackURL(*addr)
+	mgr.SetExtraEnv(func(id string) []string {
+		env := []string{"AURA_SESSION_ID=" + id}
+		if hookURL != "" {
+			env = append(env, "AURA_URL="+hookURL)
+		}
+		if *token != "" {
+			env = append(env, "AURA_TOKEN="+*token)
+		}
+		return env
+	})
 	authMw := auth.Token(*token)
+
+	devStore, err := devices.Open(*devicesFile)
+	if err != nil {
+		slog.Error("open devices store failed", "path", *devicesFile, "err", err)
+		os.Exit(1)
+	}
+	pushClient := push.NewClient()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +68,8 @@ func main() {
 	})
 	mux.Handle("GET /ws", authMw(ws.NewHandler(mgr)))
 	mux.Handle("DELETE /sessions/{id}", authMw(ws.NewKillHandler(mgr)))
+	mux.Handle("POST /devices/register", authMw(notify.NewRegisterHandler(devStore)))
+	mux.Handle("POST /hooks/stop", authMw(notify.NewStopHookHandler(devStore, pushClient)))
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -73,4 +102,31 @@ func defaultShell() string {
 		return s
 	}
 	return "/bin/bash"
+}
+
+// defaultDevicesFile resolves the JSON file used to persist registered Expo
+// push tokens. Honors XDG_CONFIG_HOME, falls back to ~/.config/aura/, and
+// finally to ./aura-devices.json when no home directory is resolvable.
+func defaultDevicesFile() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "aura", "devices.json")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".config", "aura", "devices.json")
+	}
+	return "aura-devices.json"
+}
+
+// hookCallbackURL turns the server's listen address into the http base URL
+// that in-pane hook scripts should POST to. We always target localhost — the
+// hook runs on the same host as aura-server by definition.
+func hookCallbackURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }

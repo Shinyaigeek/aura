@@ -28,6 +28,7 @@ import {
   type Tab,
   type TabsState,
 } from "@/lib/storage";
+import { subscribePushTap, usePushRegistration } from "@/lib/push";
 import { terminalHtml } from "@/lib/terminal-html";
 import { WsClient, type WsStatus } from "@/lib/ws";
 import DirectoryBrowser from "./DirectoryBrowser";
@@ -54,6 +55,28 @@ export default function TerminalScreen({ navigation }: Props) {
   const registerClient = useCallback((id: string, client: WsClient | null) => {
     if (client) clientsRef.current[id] = client;
     else delete clientsRef.current[id];
+  }, []);
+
+  usePushRegistration(cfg);
+
+  // Tapping a CC completion notification should jump to the matching tab. If
+  // that tab was closed in the UI (server session still alive), recreate it
+  // so the user can resume.
+  useEffect(() => {
+    const unsub = subscribePushTap(({ sessionId }) => {
+      if (!sessionId) return;
+      setTabsState((prev) => {
+        if (!prev) return prev;
+        if (prev.tabs.some((t) => t.id === sessionId)) {
+          return prev.activeTabId === sessionId ? prev : { ...prev, activeTabId: sessionId };
+        }
+        return {
+          tabs: [...prev.tabs, { id: sessionId, label: sessionId }],
+          activeTabId: sessionId,
+        };
+      });
+    });
+    return unsub;
   }, []);
 
   useFocusEffect(

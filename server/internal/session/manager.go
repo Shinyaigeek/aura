@@ -21,6 +21,11 @@ import (
 // Manager owns the set of live Sessions.
 type Manager struct {
 	defaultShell string
+	// extraEnv is applied to every spawned shell (via tmux `-e`). Used to
+	// expose AURA_SESSION_ID / AURA_URL / AURA_TOKEN so hook scripts running
+	// under Claude Code can call back into this server without needing any
+	// side-channel config.
+	extraEnv func(id string) []string
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -31,6 +36,15 @@ func NewManager(shell string) *Manager {
 		defaultShell: shell,
 		sessions:     make(map[string]*Session),
 	}
+}
+
+// SetExtraEnv installs a function that returns KEY=VALUE strings to inject
+// into every spawned tmux session. Called once at startup; the Manager will
+// invoke it per-session so the function can include the session id.
+func (m *Manager) SetExtraEnv(fn func(id string) []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.extraEnv = fn
 }
 
 // Attach returns a Session for the given logical id, creating or reattaching
@@ -47,7 +61,11 @@ func (m *Manager) Attach(id string) (*Session, error) {
 		return s, nil
 	}
 
-	s, err := startSession(id, m.defaultShell)
+	var env []string
+	if m.extraEnv != nil {
+		env = m.extraEnv(id)
+	}
+	s, err := startSession(id, m.defaultShell, env)
 	if err != nil {
 		return nil, err
 	}
@@ -114,11 +132,17 @@ type Session struct {
 	done   chan struct{}
 }
 
-func startSession(id, shell string) (*Session, error) {
-	args := tmux.EnsureArgs(id, shell)
+func startSession(id, shell string, extraEnv []string) (*Session, error) {
+	args := tmux.EnsureArgs(id, shell, extraEnv...)
 	cmd := exec.Command("tmux", args...)
-	// Inherit env but force a reasonable TERM so tmux renders correctly.
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// Inherit env but force a reasonable TERM so tmux renders correctly. Also
+	// mirror extraEnv into our own process env so that when tmux creates a
+	// fresh session it inherits AURA_* for the shell (tmux's `-e` only kicks
+	// in on creation, but we want the same vars visible even if tmux decided
+	// to pull them from the parent env).
+	baseEnv := append(os.Environ(), "TERM=xterm-256color")
+	baseEnv = append(baseEnv, extraEnv...)
+	cmd.Env = baseEnv
 
 	f, err := pty.Start(cmd)
 	if err != nil {
