@@ -103,7 +103,7 @@ func (c *Client) sendBatch(ctx context.Context, batch []Message) ([]Ticket, erro
 	if err != nil {
 		return nil, fmt.Errorf("push request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("push returned %s", resp.Status)

@@ -135,9 +135,9 @@ func (s *Store) flushLocked() error {
 		return fmt.Errorf("create temp devices store: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("write temp devices store: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
