@@ -1,5 +1,7 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -31,8 +33,16 @@ import {
 import { subscribePushTap, usePushRegistration } from "@/lib/push";
 import { useSessionMetaMap, type SessionMeta } from "@/lib/session-meta";
 import { terminalHtml } from "@/lib/terminal-html";
+import { uploadFile, type UploadProgress } from "@/lib/upload";
 import { WsClient, type WsStatus } from "@/lib/ws";
 import DirectoryBrowser from "./DirectoryBrowser";
+
+type PickedFile = {
+  uri: string;
+  name: string;
+  mimeType?: string;
+  size?: number;
+};
 
 type Props = NativeStackScreenProps<RootStackParamList, "Terminal">;
 
@@ -48,6 +58,8 @@ export default function TerminalScreen({ navigation }: Props) {
   const [tabsState, setTabsState] = useState<TabsState | null>(null);
   const [statuses, setStatuses] = useState<Record<string, WsStatus>>({});
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [pendingUpload, setPendingUpload] = useState<PickedFile | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -106,11 +118,31 @@ export default function TerminalScreen({ navigation }: Props) {
     ? (statuses[tabsState.activeTabId] ?? "closed")
     : "closed";
 
+  const onUploadPress = useCallback(() => {
+    const handlePick = (p: Promise<PickedFile | null>) => {
+      p.then(setPendingUpload).catch((err: unknown) => {
+        Alert.alert("Could not pick file", err instanceof Error ? err.message : String(err));
+      });
+    };
+    Alert.alert("Send to server", "Choose a source", [
+      { text: "Photo", onPress: () => handlePick(pickFromPhotos()) },
+      { text: "File", onPress: () => handlePick(pickDocument()) },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }, []);
+
   useEffect(() => {
     navigation.setOptions({
       headerTitle: () => <HeaderTitle status={activeStatus} />,
       headerRight: () => (
         <View style={styles.headerRightGroup}>
+          <Pressable
+            onPress={onUploadPress}
+            hitSlop={10}
+            style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
+          >
+            <Text style={styles.headerIcon}>⇪</Text>
+          </Pressable>
           <Pressable
             onPress={() => setBrowserOpen(true)}
             hitSlop={10}
@@ -128,7 +160,7 @@ export default function TerminalScreen({ navigation }: Props) {
         </View>
       ),
     });
-  }, [navigation, activeStatus]);
+  }, [navigation, activeStatus, onUploadPress]);
 
   const handleStatus = useCallback((id: string, status: WsStatus) => {
     setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
@@ -251,6 +283,135 @@ export default function TerminalScreen({ navigation }: Props) {
           }}
         />
       </Modal>
+
+      <Modal
+        visible={pendingUpload !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setPendingUpload(null)}
+      >
+        {pendingUpload && (
+          <DirectoryBrowser
+            client={clientsRef.current[tabsState.activeTabId] ?? null}
+            title={`Upload ${pendingUpload.name}`}
+            primaryLabel="Upload here"
+            onClose={() => setPendingUpload(null)}
+            onPick={(dest) => {
+              const file = pendingUpload;
+              setPendingUpload(null);
+              void runUpload({
+                cfg,
+                sessionId: tabsState.activeTabId,
+                file,
+                dest,
+                onProgress: setUploadProgress,
+                onInsertPath: (path) => {
+                  const client = clientsRef.current[tabsState.activeTabId];
+                  if (client) client.sendInput(`${shellQuote(path)} `);
+                },
+              }).finally(() => setUploadProgress(null));
+            }}
+          />
+        )}
+      </Modal>
+
+      {uploadProgress && <UploadOverlay progress={uploadProgress} />}
+    </View>
+  );
+}
+
+type RunUploadArgs = {
+  cfg: ServerConfig;
+  sessionId: string;
+  file: PickedFile;
+  dest: string;
+  onProgress: (p: UploadProgress | null) => void;
+  onInsertPath: (path: string) => void;
+};
+
+async function runUpload(args: RunUploadArgs): Promise<void> {
+  args.onProgress({ sent: 0, total: args.file.size ?? 0 });
+  try {
+    const result = await uploadFile(args.cfg, args.sessionId, args.file.uri, {
+      filename: args.file.name,
+      dest: args.dest,
+      mimeType: args.file.mimeType,
+      onProgress: (p) => args.onProgress(p),
+    });
+    Alert.alert(
+      "Upload complete",
+      result.path,
+      [
+        { text: "OK", style: "cancel" },
+        {
+          text: "Insert path",
+          onPress: () => args.onInsertPath(result.path),
+        },
+      ],
+      { cancelable: true },
+    );
+  } catch (e) {
+    Alert.alert("Upload failed", e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function pickFromPhotos(): Promise<PickedFile | null> {
+  const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!perm.granted) {
+    Alert.alert("Permission denied", "Photo library access is required.");
+    return null;
+  }
+  const res = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    allowsMultipleSelection: false,
+    quality: 1,
+    exif: false,
+    base64: false,
+  });
+  if (res.canceled || res.assets.length === 0) return null;
+  const a = res.assets[0];
+  return {
+    uri: a.uri,
+    name: a.fileName || deriveName(a.uri, a.mimeType),
+    mimeType: a.mimeType,
+    size: a.fileSize,
+  };
+}
+
+async function pickDocument(): Promise<PickedFile | null> {
+  const res = await DocumentPicker.getDocumentAsync({
+    copyToCacheDirectory: true,
+    multiple: false,
+    type: "*/*",
+  });
+  if (res.canceled || res.assets.length === 0) return null;
+  const a = res.assets[0];
+  return {
+    uri: a.uri,
+    name: a.name,
+    mimeType: a.mimeType,
+    size: a.size,
+  };
+}
+
+// deriveName invents a filename for a picked image that the OS didn't name
+// for us. We keep the extension from the mime type so the server-side
+// `.jpg` / `.png` stays informative.
+function deriveName(uri: string, mimeType?: string): string {
+  const extFromMime = mimeType?.split("/")[1]?.replace("jpeg", "jpg");
+  const ext = extFromMime || uri.split(".").pop() || "bin";
+  return `photo-${Date.now()}.${ext}`;
+}
+
+function UploadOverlay({ progress }: { progress: UploadProgress }) {
+  const pct =
+    progress.total > 0 ? Math.min(100, Math.round((progress.sent / progress.total) * 100)) : null;
+  return (
+    <View pointerEvents="auto" style={styles.overlay}>
+      <View style={styles.overlayCard}>
+        <ActivityIndicator color="#7aa2f7" />
+        <Text style={styles.overlayText}>Uploading… {pct !== null ? `${pct}%` : "…"}</Text>
+      </View>
     </View>
   );
 }
@@ -701,6 +862,29 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 15,
     letterSpacing: 0.2,
+  },
+
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(11, 11, 15, 0.7)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  overlayCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#14151c",
+    borderWidth: 1,
+    borderColor: "#2a2d3d",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 14,
+  },
+  overlayText: {
+    color: "#e4e6ef",
+    fontSize: 14,
+    marginLeft: 12,
+    fontWeight: "500",
   },
 
   banner: {

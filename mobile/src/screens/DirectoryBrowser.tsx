@@ -17,11 +17,21 @@ type Props = {
   client: WsClient | null;
   onClose: () => void;
   onPick: (path: string) => void;
+  /** Heading shown in the sheet. Defaults to "Move to…". */
+  title?: string;
+  /** Label on the confirm button. Defaults to "Move here". */
+  primaryLabel?: string;
 };
 
 type Row = DirEntry | { name: ".."; isDir: true; synthetic: true };
 
-export default function DirectoryBrowser({ client, onClose, onPick }: Props) {
+export default function DirectoryBrowser({
+  client,
+  onClose,
+  onPick,
+  title = "Move to…",
+  primaryLabel = "Move here",
+}: Props) {
   const [path, setPath] = useState<string | null>(null);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,7 +101,7 @@ export default function DirectoryBrowser({ client, onClose, onPick }: Props) {
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Move to…</Text>
+        <Text style={styles.title}>{title}</Text>
         <Pressable
           onPress={onClose}
           hitSlop={10}
@@ -160,7 +170,7 @@ export default function DirectoryBrowser({ client, onClose, onPick }: Props) {
             !path && styles.primaryDisabled,
           ]}
         >
-          <Text style={styles.primaryText}>Move here</Text>
+          <Text style={styles.primaryText}>{primaryLabel}</Text>
         </Pressable>
       </View>
     </SafeAreaView>

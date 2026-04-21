@@ -22,6 +22,7 @@ import (
 	"github.com/Shinyaigeek/aura/server/internal/push"
 	"github.com/Shinyaigeek/aura/server/internal/session"
 	"github.com/Shinyaigeek/aura/server/internal/tmux"
+	"github.com/Shinyaigeek/aura/server/internal/upload"
 	"github.com/Shinyaigeek/aura/server/internal/ws"
 )
 
@@ -93,6 +94,7 @@ func main() {
 	mux.Handle("GET /ws", authMw(ws.NewHandler(mgr)))
 	mux.Handle("DELETE /sessions/{id}", authMw(ws.NewKillHandler(mgr)))
 	mux.Handle("GET /sessions/{id}/meta", authMw(notify.NewMetaHandler(cwdLookup, titles)))
+	mux.Handle("POST /sessions/{id}/upload", authMw(upload.NewHandler(cwdLookup)))
 	mux.Handle("POST /devices/register", authMw(notify.NewRegisterHandler(devStore)))
 	mux.Handle("POST /hooks/stop", authMw(notify.NewStopHookHandler(devStore, pushClient, titles)))
 

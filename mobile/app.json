@@ -44,7 +44,13 @@
           }
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "aura uses your photo library to send images to your aura-server."
+        }
+      ]
     ]
   }
 }
