@@ -83,10 +83,21 @@ export class WsClient {
   /** Force a (re)connect immediately — used when the app returns to foreground
    * or when a previously-stopped client is being revived (e.g. tab becomes
    * active again after an idle detach). Resets `closedByUser` so that the next
-   * dropped connection triggers auto-reconnect instead of staying dead. */
+   * dropped connection triggers auto-reconnect instead of staying dead.
+   *
+   * Idempotent against an in-flight connection: if a socket is already OPEN
+   * or CONNECTING, do nothing. Without this, two kick()s in quick succession
+   * (e.g. the client-creation effect + the [active] effect both firing on
+   * mount) would each call connect() and leave two WebSockets racing. The
+   * server's tmux Attach returns the same session for both, so PTY stdout
+   * gets split across the two sockets — the terminal shows only half the
+   * bytes, which visually reads as a black / frozen pane. */
   kick(): void {
     this.closedByUser = false;
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+    if (this.ws) {
+      const rs = this.ws.readyState;
+      if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING) return;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
