@@ -14,6 +14,8 @@
 //   "i<base64>"        input bytes typed by the user
 //   "r<rows>,<cols>"   viewport resize
 //   "R"                xterm is mounted and ready to receive
+//   "B<base64>"        full scrollback buffer dump (utf-8), in response to
+//                      __auraDumpBuffer() — used by the copy modal
 export const terminalHtml = `<!doctype html>
 <html>
 <head>
@@ -99,6 +101,29 @@ export const terminalHtml = `<!doctype html>
     };
     window.__auraFit = sendResize;
     window.__auraClear = function () { term.clear(); };
+    // Serialize the entire active buffer (scrollback + viewport) to UTF-8 text
+    // and post it back to RN. The RN side opens a modal with selectable text so
+    // the user can pick a region with native handles and hit Copy. We can't
+    // rely on in-place selection because xterm's rows set user-select: none and
+    // the custom touch handler below claims vertical drags for scrollback.
+    window.__auraDumpBuffer = function () {
+      try {
+        var buf = term.buffer.active;
+        var lines = [];
+        for (var y = 0; y < buf.length; y++) {
+          var line = buf.getLine(y);
+          lines.push(line ? line.translateToString(true) : '');
+        }
+        while (lines.length && lines[lines.length - 1] === '') lines.pop();
+        var text = lines.join('\n');
+        var bytes = new TextEncoder().encode(text);
+        var binary = '';
+        for (var i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        post('B' + btoa(binary));
+      } catch (e) {
+        post('B');
+      }
+    };
     // Focus the helper textarea directly as well as calling term.focus(). On
     // tab switches, term.focus() alone sometimes leaves the hidden textarea
     // unfocused — the native WebView has just regained focus and xterm's

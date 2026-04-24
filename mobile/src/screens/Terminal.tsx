@@ -60,6 +60,7 @@ export default function TerminalScreen({ navigation }: Props) {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [pendingUpload, setPendingUpload] = useState<PickedFile | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [copyText, setCopyText] = useState<string | null>(null);
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -68,6 +69,18 @@ export default function TerminalScreen({ navigation }: Props) {
   const registerClient = useCallback((id: string, client: WsClient | null) => {
     if (client) clientsRef.current[id] = client;
     else delete clientsRef.current[id];
+  }, []);
+
+  // Parallel registry for WebView refs so the header can invoke
+  // __auraDumpBuffer on the active tab's WebView.
+  const websRef = useRef<Record<string, WebView>>({});
+  const registerWeb = useCallback((id: string, web: WebView | null) => {
+    if (web) websRef.current[id] = web;
+    else delete websRef.current[id];
+  }, []);
+
+  const handleBufferDump = useCallback((text: string) => {
+    setCopyText(text);
   }, []);
 
   usePushRegistration(cfg);
@@ -118,6 +131,14 @@ export default function TerminalScreen({ navigation }: Props) {
     ? (statuses[tabsState.activeTabId] ?? "closed")
     : "closed";
 
+  const onCopyPress = useCallback(() => {
+    const id = tabsState?.activeTabId;
+    if (!id) return;
+    const web = websRef.current[id];
+    if (!web) return;
+    web.injectJavaScript("window.__auraDumpBuffer&&window.__auraDumpBuffer();true;");
+  }, [tabsState]);
+
   const onUploadPress = useCallback(() => {
     const handlePick = (p: Promise<PickedFile | null>) => {
       p.then(setPendingUpload).catch((err: unknown) => {
@@ -136,6 +157,13 @@ export default function TerminalScreen({ navigation }: Props) {
       headerTitle: () => <HeaderTitle status={activeStatus} />,
       headerRight: () => (
         <View style={styles.headerRightGroup}>
+          <Pressable
+            onPress={onCopyPress}
+            hitSlop={10}
+            style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
+          >
+            <Text style={styles.headerIcon}>⧉</Text>
+          </Pressable>
           <Pressable
             onPress={onUploadPress}
             hitSlop={10}
@@ -160,7 +188,7 @@ export default function TerminalScreen({ navigation }: Props) {
         </View>
       ),
     });
-  }, [navigation, activeStatus, onUploadPress]);
+  }, [navigation, activeStatus, onCopyPress, onUploadPress]);
 
   const handleStatus = useCallback((id: string, status: WsStatus) => {
     setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
@@ -262,6 +290,8 @@ export default function TerminalScreen({ navigation }: Props) {
             active={tab.id === tabsState.activeTabId}
             onStatus={handleStatus}
             registerClient={registerClient}
+            registerWeb={registerWeb}
+            onBuffer={handleBufferDump}
           />
         ))}
       </View>
@@ -316,6 +346,36 @@ export default function TerminalScreen({ navigation }: Props) {
       </Modal>
 
       {uploadProgress && <UploadOverlay progress={uploadProgress} />}
+
+      <Modal
+        visible={copyText !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setCopyText(null)}
+      >
+        <CopyModal text={copyText ?? ""} onClose={() => setCopyText(null)} />
+      </Modal>
+    </View>
+  );
+}
+
+function CopyModal({ text, onClose }: { text: string; onClose: () => void }) {
+  return (
+    <View style={styles.copyModalContainer}>
+      <View style={styles.copyModalHeader}>
+        <Text style={styles.copyModalTitle}>Select & copy</Text>
+        <Pressable onPress={onClose} hitSlop={10}>
+          <Text style={styles.copyModalDone}>Done</Text>
+        </Pressable>
+      </View>
+      <ScrollView
+        style={styles.copyModalScroll}
+        contentContainerStyle={styles.copyModalScrollContent}
+      >
+        <Text selectable style={styles.copyModalText}>
+          {text.length > 0 ? text : "(buffer is empty)"}
+        </Text>
+      </ScrollView>
     </View>
   );
 }
@@ -428,6 +488,8 @@ type TabViewProps = {
   active: boolean;
   onStatus: (id: string, status: WsStatus) => void;
   registerClient: (id: string, client: WsClient | null) => void;
+  registerWeb: (id: string, web: WebView | null) => void;
+  onBuffer: (text: string) => void;
 };
 
 // One tab = one WebSocket + one WebView (with its own xterm.js instance).
@@ -435,7 +497,15 @@ type TabViewProps = {
 // xterm buffer survive tab switches. The WebSocket, in contrast, is dropped
 // after IDLE_DETACH_MS of being non-active — the server's tmux session keeps
 // running regardless.
-function TabView({ cfg, tab, active, onStatus, registerClient }: TabViewProps) {
+function TabView({
+  cfg,
+  tab,
+  active,
+  onStatus,
+  registerClient,
+  registerWeb,
+  onBuffer,
+}: TabViewProps) {
   const webRef = useRef<WebView | null>(null);
   const clientRef = useRef<WsClient | null>(null);
   const webReadyRef = useRef(false);
@@ -539,35 +609,62 @@ function TabView({ cfg, tab, active, onStatus, registerClient }: TabViewProps) {
     return () => sub.remove();
   }, [active]);
 
-  const onWebMessage = useCallback((event: WebViewMessageEvent) => {
-    const raw = event.nativeEvent.data;
-    if (!raw) return;
-    const prefix = raw.charCodeAt(0);
-    // 'i' = input
-    if (prefix === 105) {
-      const bytes = base64ToBytes(raw.slice(1));
-      clientRef.current?.sendInput(
-        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
-      );
-      return;
-    }
-    // 'r' = resize
-    if (prefix === 114) {
-      const [r, c] = raw.slice(1).split(",");
-      const rows = Math.max(1, Math.floor(Number(r) || 0));
-      const cols = Math.max(1, Math.floor(Number(c) || 0));
-      clientRef.current?.sendControl({ type: "resize", rows, cols });
-      return;
-    }
-    // 'R' = ready
-    if (prefix === 82) {
-      webReadyRef.current = true;
-      webRef.current?.injectJavaScript("window.__auraFit();window.__auraFocus();true;");
-      return;
-    }
-  }, []);
+  const onWebMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      const raw = event.nativeEvent.data;
+      if (!raw) return;
+      const prefix = raw.charCodeAt(0);
+      // 'i' = input
+      if (prefix === 105) {
+        const bytes = base64ToBytes(raw.slice(1));
+        clientRef.current?.sendInput(
+          bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        );
+        return;
+      }
+      // 'r' = resize
+      if (prefix === 114) {
+        const [r, c] = raw.slice(1).split(",");
+        const rows = Math.max(1, Math.floor(Number(r) || 0));
+        const cols = Math.max(1, Math.floor(Number(c) || 0));
+        clientRef.current?.sendControl({ type: "resize", rows, cols });
+        return;
+      }
+      // 'R' = ready
+      if (prefix === 82) {
+        webReadyRef.current = true;
+        webRef.current?.injectJavaScript("window.__auraFit();window.__auraFocus();true;");
+        return;
+      }
+      // 'B' = buffer dump response (utf-8 base64)
+      if (prefix === 66) {
+        const payload = raw.slice(1);
+        if (payload.length === 0) {
+          onBuffer("");
+          return;
+        }
+        try {
+          const bytes = base64ToBytes(payload);
+          const text = new TextDecoder().decode(bytes);
+          onBuffer(text);
+        } catch {
+          onBuffer("");
+        }
+        return;
+      }
+    },
+    [onBuffer],
+  );
 
   const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);
+
+  const setWebRef = useCallback(
+    (w: WebView | null) => {
+      webRef.current = w;
+      registerWeb(tab.id, w);
+    },
+    [registerWeb, tab.id],
+  );
 
   return (
     <View
@@ -575,7 +672,7 @@ function TabView({ cfg, tab, active, onStatus, registerClient }: TabViewProps) {
       pointerEvents={active ? "auto" : "none"}
     >
       <WebView
-        ref={webRef}
+        ref={setWebRef}
         originWhitelist={["*"]}
         source={source}
         onMessage={onWebMessage}
@@ -885,6 +982,46 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 12,
     fontWeight: "500",
+  },
+
+  copyModalContainer: {
+    flex: 1,
+    backgroundColor: "#0b0b0f",
+  },
+  copyModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#1a1c26",
+  },
+  copyModalTitle: {
+    color: "#e4e6ef",
+    fontSize: 16,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  copyModalDone: {
+    color: "#7aa2f7",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  copyModalScroll: { flex: 1 },
+  copyModalScrollContent: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  copyModalText: {
+    color: "#e4e6ef",
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: Platform.select({
+      ios: "Menlo",
+      android: "monospace",
+      default: "monospace",
+    }),
   },
 
   banner: {
