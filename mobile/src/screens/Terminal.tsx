@@ -79,6 +79,14 @@ export default function TerminalScreen({ navigation }: Props) {
     else delete websRef.current[id];
   }, []);
 
+  // activeTabIdRef shadows tabsState.activeTabId so header callbacks (copy,
+  // upload) can stay referentially stable — otherwise `useCallback([tabsState])`
+  // churns on every status/tab/meta update, thrashing navigation.setOptions
+  // and, on Android native-stack, causing header/WebView re-attach storms that
+  // presented as "offline" or a black terminal even when connected.
+  const activeTabIdRef = useRef<string | null>(null);
+  activeTabIdRef.current = tabsState?.activeTabId ?? null;
+
   const handleBufferDump = useCallback((text: string) => {
     setCopyText(text);
   }, []);
@@ -132,12 +140,12 @@ export default function TerminalScreen({ navigation }: Props) {
     : "closed";
 
   const onCopyPress = useCallback(() => {
-    const id = tabsState?.activeTabId;
+    const id = activeTabIdRef.current;
     if (!id) return;
     const web = websRef.current[id];
     if (!web) return;
     web.injectJavaScript("window.__auraDumpBuffer&&window.__auraDumpBuffer();true;");
-  }, [tabsState]);
+  }, []);
 
   const onUploadPress = useCallback(() => {
     const handlePick = (p: Promise<PickedFile | null>) => {
@@ -189,6 +197,8 @@ export default function TerminalScreen({ navigation }: Props) {
       ),
     });
   }, [navigation, activeStatus, onCopyPress, onUploadPress]);
+  // onCopyPress / onUploadPress are ref-stable now; they're listed so the lint
+  // rule stays happy but their identities never change.
 
   const handleStatus = useCallback((id: string, status: WsStatus) => {
     setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
@@ -512,6 +522,11 @@ function TabView({
   const pendingFramesRef = useRef<Uint8Array[]>([]);
   const flushScheduledRef = useRef(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror `active` into a ref so the client-creation effect can kick a freshly
+  // built client without taking `active` as a dep (which would tear the client
+  // down every time the tab toggled).
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   const flushPending = useCallback(() => {
     flushScheduledRef.current = false;
@@ -532,7 +547,11 @@ function TabView({
   }, []);
 
   // Own the WsClient for this tab's lifetime. Creation runs when cfg or tab.id
-  // change; the active-state effect below decides when to actually connect.
+  // change; we kick() immediately if the tab is already active so a focus-time
+  // cfg re-load (which always hands us a fresh object reference, even when its
+  // url/token are identical) doesn't leave us with a freshly-built client that
+  // nobody ever started — that was the "offline but nothing I can do" and
+  // "connected-but-black" state users saw after upgrading.
   useEffect(() => {
     const client = new WsClient(cfg, tab.id, {
       onStatus: (s) => onStatus(tab.id, s),
@@ -547,6 +566,7 @@ function TabView({
     });
     clientRef.current = client;
     registerClient(tab.id, client);
+    if (activeRef.current) client.kick();
 
     return () => {
       if (idleTimerRef.current) {
@@ -658,13 +678,14 @@ function TabView({
 
   const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);
 
-  const setWebRef = useCallback(
-    (w: WebView | null) => {
-      webRef.current = w;
-      registerWeb(tab.id, w);
-    },
-    [registerWeb, tab.id],
-  );
+  // Publish this tab's WebView into the shared registry (used by the header
+  // copy button). Using a post-mount effect + direct ref object mirrors the
+  // v0.0.6 attachment shape exactly; switching to a callback ref in 0.0.7 had
+  // the WebView briefly detach/reattach during re-renders on Android.
+  useEffect(() => {
+    registerWeb(tab.id, webRef.current);
+    return () => registerWeb(tab.id, null);
+  }, [registerWeb, tab.id]);
 
   return (
     <View
@@ -672,7 +693,7 @@ function TabView({
       pointerEvents={active ? "auto" : "none"}
     >
       <WebView
-        ref={setWebRef}
+        ref={webRef}
         originWhitelist={["*"]}
         source={source}
         onMessage={onWebMessage}
