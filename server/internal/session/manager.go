@@ -133,7 +133,12 @@ type Session struct {
 }
 
 func startSession(id, shell string, extraEnv []string) (*Session, error) {
-	args := tmux.EnsureArgs(id, shell, extraEnv...)
+	// Anchor freshly created tmux sessions at $HOME so they don't inherit
+	// aura-server's launch cwd (which sometimes happens to be inside an
+	// unrelated repo). Reattaches to existing sessions ignore -c and keep
+	// their pane's cwd, which is what we want.
+	startDir, _ := os.UserHomeDir()
+	args := tmux.EnsureArgs(id, shell, startDir, extraEnv...)
 	cmd := exec.Command("tmux", args...)
 	// Inherit env but force a reasonable TERM so tmux renders correctly. Also
 	// mirror extraEnv into our own process env so that when tmux creates a

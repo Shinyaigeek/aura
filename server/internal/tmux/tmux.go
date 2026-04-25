@@ -45,11 +45,19 @@ func Exists(id string) (bool, error) {
 // against races: two clients connecting simultaneously both land in the same
 // session.
 //
+// `startDir`, when non-empty, is passed as `-c` so a freshly created session
+// starts there instead of inheriting aura-server's cwd (which is whatever the
+// server happened to be launched from). Tmux ignores `-c` on the attach branch
+// of `-A`, so live sessions keep their current pane cwd.
+//
 // `env` entries (KEY=VALUE) are passed as tmux `-e` flags so they live in the
 // session environment; they are only honored when the session is actually
 // created, not on a plain attach.
-func EnsureArgs(id, shell string, env ...string) []string {
+func EnsureArgs(id, shell, startDir string, env ...string) []string {
 	args := []string{"new-session", "-A"}
+	if startDir != "" {
+		args = append(args, "-c", startDir)
+	}
 	for _, kv := range env {
 		if kv == "" {
 			continue
