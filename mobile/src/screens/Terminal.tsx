@@ -147,6 +147,16 @@ export default function TerminalScreen({ navigation }: Props) {
     web.injectJavaScript("window.__auraDumpBuffer&&window.__auraDumpBuffer();true;");
   }, []);
 
+  const onEscPress = useCallback(() => {
+    const id = activeTabIdRef.current;
+    if (!id) return;
+    clientsRef.current[id]?.sendInput("\x1b");
+    // Tapping a header button steals focus from the WebView's hidden textarea
+    // and dismisses the soft keyboard. Re-focus so the user can keep typing
+    // the next thing Claude prompts for without re-tapping the terminal.
+    websRef.current[id]?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
+  }, []);
+
   const onUploadPress = useCallback(() => {
     const handlePick = (p: Promise<PickedFile | null>) => {
       p.then(setPendingUpload).catch((err: unknown) => {
@@ -165,6 +175,13 @@ export default function TerminalScreen({ navigation }: Props) {
       headerTitle: () => <HeaderTitle status={activeStatus} />,
       headerRight: () => (
         <View style={styles.headerRightGroup}>
+          <Pressable
+            onPress={onEscPress}
+            hitSlop={10}
+            style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
+          >
+            <Text style={styles.headerEscText}>ESC</Text>
+          </Pressable>
           <Pressable
             onPress={onCopyPress}
             hitSlop={10}
@@ -196,9 +213,9 @@ export default function TerminalScreen({ navigation }: Props) {
         </View>
       ),
     });
-  }, [navigation, activeStatus, onCopyPress, onUploadPress]);
-  // onCopyPress / onUploadPress are ref-stable now; they're listed so the lint
-  // rule stays happy but their identities never change.
+  }, [navigation, activeStatus, onCopyPress, onUploadPress, onEscPress]);
+  // onCopyPress / onUploadPress / onEscPress are ref-stable now; they're listed
+  // so the lint rule stays happy but their identities never change.
 
   const handleStatus = useCallback((id: string, status: WsStatus) => {
     setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
@@ -931,6 +948,12 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   headerIcon: { color: "#c0caf5", fontSize: 20 },
+  headerEscText: {
+    color: "#c0caf5",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
 
   emptyContainer: {
     flex: 1,
