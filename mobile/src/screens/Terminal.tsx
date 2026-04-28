@@ -70,6 +70,16 @@ export default function TerminalScreen({ navigation }: Props) {
   const [dbgBytes, setDbgBytes] = useState<number>(0);
   const [dbgTaps, setDbgTaps] = useState<number>(0);
   const [dbgReady, setDbgReady] = useState<boolean>(false);
+  // Bytes/taps go through refs first and are flushed to state on a 1Hz
+  // interval. v0.0.13 routed them straight into setState on every event,
+  // which on a chatty session (tmux status bar emits bytes constantly)
+  // turned into hundreds of state updates per second. Each re-render
+  // passed new inline-arrow callbacks to <WebView>; react-native-webview
+  // 13.x apparently treats that as enough of a prop change to recycle
+  // the underlying WebView, which is why the v0.0.13 trail showed
+  // bcl/loadstart/loadend repeating without ever reaching script-start.
+  const dbgBytesRef = useRef(0);
+  const dbgTapsRef = useRef(0);
   const onDbg = useCallback((line: string) => {
     setDbgLast((prev) => {
       // Accumulate the trail so the overlay shows the sequence, not just
@@ -80,10 +90,17 @@ export default function TerminalScreen({ navigation }: Props) {
     if (line === "R-sent") setDbgReady(true);
   }, []);
   const onDbgBytes = useCallback((n: number) => {
-    setDbgBytes((prev) => prev + n);
+    dbgBytesRef.current += n;
   }, []);
   const onDbgTap = useCallback(() => {
-    setDbgTaps((prev) => prev + 1);
+    dbgTapsRef.current += 1;
+  }, []);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setDbgBytes((prev) => (prev === dbgBytesRef.current ? prev : dbgBytesRef.current));
+      setDbgTaps((prev) => (prev === dbgTapsRef.current ? prev : dbgTapsRef.current));
+    }, 1000);
+    return () => clearInterval(id);
   }, []);
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
@@ -765,22 +782,42 @@ function TabView({
     return () => registerWeb(tab.id, null);
   }, [registerWeb, tab.id]);
 
-  // onTouchEnd here is purely diagnostic — it doesn't claim the responder,
-  // so the WebView still receives the touch normally for xterm focus and
-  // scrollback. The counter tells us whether taps even reach the wrapping
-  // View when the cold-start "tap does nothing" symptom appears.
+  // Stabilise every callback we hand to <WebView>. v0.0.13 used inline
+  // arrows here; on a chatty session that pushed enough re-renders to
+  // make react-native-webview 13.x recycle the native WebView each time,
+  // looping forever on bcl→loadstart→loadend without the inline IIFE
+  // ever getting a chance to finish.
+  const onTouchEnd = useCallback(() => {
+    onDbgTap();
+    webRef.current?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
+  }, [onDbgTap]);
+  const onWvLoadStart = useCallback(() => onDbg("wv:loadstart"), [onDbg]);
+  const onWvLoadEnd = useCallback(() => onDbg("wv:loadend"), [onDbg]);
+  const onWvError = useCallback(
+    (e: { nativeEvent: { code?: number; description?: string } }) =>
+      onDbg(`wv:err:${e.nativeEvent.code ?? "?"}:${e.nativeEvent.description ?? ""}`),
+    [onDbg],
+  );
+  const onWvHttpError = useCallback(
+    (e: { nativeEvent: { statusCode: number } }) => onDbg(`wv:http:${e.nativeEvent.statusCode}`),
+    [onDbg],
+  );
+  const onWvRenderProcessGone = useCallback(
+    (e: { nativeEvent: { didCrash?: boolean } }) =>
+      onDbg(`wv:rpg:${e.nativeEvent.didCrash ? "crash" : "killed"}`),
+    [onDbg],
+  );
+  const injectedBcl = useMemo(
+    () =>
+      "(function(){try{var p=window.ReactNativeWebView&&window.ReactNativeWebView.postMessage;p&&p.call(window.ReactNativeWebView,'Dbcl');}catch(e){}})();true;",
+    [],
+  );
+
   return (
     <View
       style={[styles.tabView, !active && styles.tabViewHidden]}
       pointerEvents={active ? "auto" : "none"}
-      onTouchEnd={() => {
-        onDbgTap();
-        // Defensive: also force-focus the xterm helper textarea on every
-        // tap. If something below is eating the WebView's native focus
-        // path, this brings the keyboard up regardless. injectJavaScript
-        // is a no-op until the WebView has loaded.
-        webRef.current?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
-      }}
+      onTouchEnd={onTouchEnd}
     >
       <WebView
         ref={webRef}
@@ -799,23 +836,12 @@ function TabView({
         androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
         scrollEnabled={false}
         webviewDebuggingEnabled
-        // Diagnostic probes that don't depend on the inline IIFE running.
-        // If the IIFE is silent (no 'D' messages) but `wv:loadend` lands,
-        // we know the document loaded — so the issue is either inline
-        // script execution or the ReactNativeWebView bridge being broken
-        // by the time the IIFE runs. injectedJavaScriptBeforeContentLoaded
-        // pings before any page script, which discriminates between the
-        // two: 'bcl' + no 'script-start' = inline-script-blocked; neither
-        // = bridge dead.
-        onLoadStart={() => onDbg("wv:loadstart")}
-        onLoadEnd={() => onDbg("wv:loadend")}
-        onError={(e) =>
-          onDbg(`wv:err:${e.nativeEvent.code ?? "?"}:${e.nativeEvent.description ?? ""}`)
-        }
-        onHttpError={(e) => onDbg(`wv:http:${e.nativeEvent.statusCode}`)}
-        injectedJavaScriptBeforeContentLoaded={
-          "(function(){try{var p=window.ReactNativeWebView&&window.ReactNativeWebView.postMessage;p&&p.call(window.ReactNativeWebView,'Dbcl');}catch(e){}})();true;"
-        }
+        onLoadStart={onWvLoadStart}
+        onLoadEnd={onWvLoadEnd}
+        onError={onWvError}
+        onHttpError={onWvHttpError}
+        onRenderProcessGone={onWvRenderProcessGone}
+        injectedJavaScriptBeforeContentLoaded={injectedBcl}
       />
     </View>
   );
