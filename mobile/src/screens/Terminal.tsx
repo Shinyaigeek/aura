@@ -897,6 +897,17 @@ function TabViewImpl({
       "(function(){try{var p=window.ReactNativeWebView&&window.ReactNativeWebView.postMessage;p&&p.call(window.ReactNativeWebView,'Dbcl');}catch(e){}})();true;",
     [],
   );
+  // Sibling probe: injectedJavaScript runs *after* the document and all
+  // its scripts have loaded. If `ijs` arrives but the inline IIFE's
+  // `script-start` doesn't, we know the document loaded fine and the
+  // bridge works at that point — the inline <script> tag itself isn't
+  // being executed (CSP, source URL mismatch, parser error before it).
+  // If neither shows, the bridge or the document didn't actually finish.
+  const injectedAfter = useMemo(
+    () =>
+      "(function(){try{var p=window.ReactNativeWebView&&window.ReactNativeWebView.postMessage;p&&p.call(window.ReactNativeWebView,'Dijs:T='+(typeof window.Terminal)+',F='+(typeof window.FitAddon));}catch(e){}})();true;",
+    [],
+  );
   // Inline `[styles.tabView, !active && ...]` allocates a fresh array on
   // every render. RN normalises style arrays for the bridge, but on new
   // arch + react-native-webview this can still translate to "the wrapping
@@ -934,6 +945,7 @@ function TabViewImpl({
           onHttpError={onWvHttpError}
           onRenderProcessGone={onWvRenderProcessGone}
           injectedJavaScriptBeforeContentLoaded={injectedBcl}
+          injectedJavaScript={injectedAfter}
         />
       )}
     </View>
