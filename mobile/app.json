@@ -3,7 +3,7 @@
     "name": "aura",
     "slug": "aura",
     "scheme": "aura",
-    "version": "0.0.15",
+    "version": "0.0.16",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,

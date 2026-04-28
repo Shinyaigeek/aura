@@ -70,6 +70,12 @@ export default function TerminalScreen({ navigation }: Props) {
   const [dbgBytes, setDbgBytes] = useState<number>(0);
   const [dbgTaps, setDbgTaps] = useState<number>(0);
   const [dbgReady, setDbgReady] = useState<boolean>(false);
+  // Mount/unmount counters live as their own state fields so they survive
+  // the trail's 140-char truncation. v0.0.15 logged tabview-mount into the
+  // trail but the rapid bcl/loadstart loop pushed it out of the window
+  // before the user could read it.
+  const [dbgMounts, setDbgMounts] = useState<number>(0);
+  const [dbgUnmounts, setDbgUnmounts] = useState<number>(0);
   // Bytes/taps go through refs first and are flushed to state on a 1Hz
   // interval. v0.0.13 routed them straight into setState on every event,
   // which on a chatty session (tmux status bar emits bytes constantly)
@@ -94,6 +100,12 @@ export default function TerminalScreen({ navigation }: Props) {
   }, []);
   const onDbgTap = useCallback(() => {
     dbgTapsRef.current += 1;
+  }, []);
+  const onDbgMount = useCallback(() => {
+    setDbgMounts((prev) => prev + 1);
+  }, []);
+  const onDbgUnmount = useCallback(() => {
+    setDbgUnmounts((prev) => prev + 1);
   }, []);
   useEffect(() => {
     const id = setInterval(() => {
@@ -363,6 +375,8 @@ export default function TerminalScreen({ navigation }: Props) {
             onDbg={onDbg}
             onDbgBytes={onDbgBytes}
             onDbgTap={onDbgTap}
+            onDbgMount={onDbgMount}
+            onDbgUnmount={onDbgUnmount}
           />
         ))}
       </View>
@@ -372,6 +386,8 @@ export default function TerminalScreen({ navigation }: Props) {
         ready={dbgReady}
         bytes={dbgBytes}
         taps={dbgTaps}
+        mounts={dbgMounts}
+        unmounts={dbgUnmounts}
         last={dbgLast}
       />
 
@@ -571,6 +587,8 @@ type TabViewProps = {
   onDbg: (line: string) => void;
   onDbgBytes: (count: number) => void;
   onDbgTap: () => void;
+  onDbgMount: () => void;
+  onDbgUnmount: () => void;
 };
 
 // One tab = one WebSocket + one WebView (with its own xterm.js instance).
@@ -591,17 +609,18 @@ function TabViewImpl({
   onDbg,
   onDbgBytes,
   onDbgTap,
+  onDbgMount,
+  onDbgUnmount,
 }: TabViewProps) {
-  // Diagnostic: log on TabView mount / unmount. If the trail shows
-  // multiple `tabview-mount` markers without intervening unmounts, the
-  // WebView is being recycled because TabView itself is remounting —
-  // which makes `useMemo([])` for source pointless (it re-evaluates on
-  // every fresh mount) and explains why the v0.0.13/0.0.14 trails kept
-  // looping bcl/loadstart without reaching the IIFE.
+  // Diagnostic: bump dedicated mount / unmount counters in the parent.
+  // Putting these in their own state fields (instead of the trail) means
+  // they survive past the trail's 140-char truncation, so the user can
+  // tell at a glance whether TabView is remounting in a loop without
+  // having to read a long string.
   useEffect(() => {
-    onDbg(`tabview-mount#${tab.id}`);
-    return () => onDbg(`tabview-unmount#${tab.id}`);
-    // onDbg is referentially stable; tab.id is part of the marker.
+    onDbgMount();
+    return () => onDbgUnmount();
+    // Stable callbacks; we want exactly one call per real mount/unmount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const webRef = useRef<WebView | null>(null);
@@ -971,15 +990,19 @@ function DebugOverlay({
   ready,
   bytes,
   taps,
+  mounts,
+  unmounts,
   last,
 }: {
   status: WsStatus;
   ready: boolean;
   bytes: number;
   taps: number;
+  mounts: number;
+  unmounts: number;
   last: string;
 }) {
-  const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps}`;
+  const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps} M:${mounts} U:${unmounts}`;
   return (
     <View style={styles.dbgOverlay} pointerEvents="none">
       <Text style={styles.dbgText} numberOfLines={1}>
