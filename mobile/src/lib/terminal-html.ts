@@ -133,7 +133,7 @@ export const terminalHtml = `<!doctype html>
           lines.push(line ? line.translateToString(true) : '');
         }
         while (lines.length && lines[lines.length - 1] === '') lines.pop();
-        var text = lines.join('\n');
+        var text = lines.join('\\n');
         var bytes = new TextEncoder().encode(text);
         var binary = '';
         for (var i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
