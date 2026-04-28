@@ -61,6 +61,25 @@ export default function TerminalScreen({ navigation }: Props) {
   const [pendingUpload, setPendingUpload] = useState<PickedFile | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [copyText, setCopyText] = useState<string | null>(null);
+  // Diagnostic state for the cold-start "connected, black, no input" bug.
+  // The active TabView reports phase markers, byte counts, and tap counts
+  // here; DebugOverlay paints a one-line summary on top of the screen so we
+  // can tell on the device whether xterm even initialised, whether bytes
+  // are reaching it, and whether taps reach the WebView at all.
+  const [dbgLast, setDbgLast] = useState<string>("");
+  const [dbgBytes, setDbgBytes] = useState<number>(0);
+  const [dbgTaps, setDbgTaps] = useState<number>(0);
+  const [dbgReady, setDbgReady] = useState<boolean>(false);
+  const onDbg = useCallback((line: string) => {
+    setDbgLast(line);
+    if (line === "R-sent") setDbgReady(true);
+  }, []);
+  const onDbgBytes = useCallback((n: number) => {
+    setDbgBytes((prev) => prev + n);
+  }, []);
+  const onDbgTap = useCallback(() => {
+    setDbgTaps((prev) => prev + 1);
+  }, []);
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -319,10 +338,20 @@ export default function TerminalScreen({ navigation }: Props) {
             registerClient={registerClient}
             registerWeb={registerWeb}
             onBuffer={handleBufferDump}
+            onDbg={onDbg}
+            onDbgBytes={onDbgBytes}
+            onDbgTap={onDbgTap}
           />
         ))}
       </View>
       {activeStatus !== "open" && <OfflineBanner status={activeStatus} />}
+      <DebugOverlay
+        status={activeStatus}
+        ready={dbgReady}
+        bytes={dbgBytes}
+        taps={dbgTaps}
+        last={dbgLast}
+      />
 
       <Modal
         visible={browserOpen}
@@ -517,6 +546,9 @@ type TabViewProps = {
   registerClient: (id: string, client: WsClient | null) => void;
   registerWeb: (id: string, web: WebView | null) => void;
   onBuffer: (text: string) => void;
+  onDbg: (line: string) => void;
+  onDbgBytes: (count: number) => void;
+  onDbgTap: () => void;
 };
 
 // One tab = one WebSocket + one WebView (with its own xterm.js instance).
@@ -532,6 +564,9 @@ function TabView({
   registerClient,
   registerWeb,
   onBuffer,
+  onDbg,
+  onDbgBytes,
+  onDbgTap,
 }: TabViewProps) {
   const webRef = useRef<WebView | null>(null);
   const clientRef = useRef<WsClient | null>(null);
@@ -578,6 +613,7 @@ function TabView({
         // the frame: tmux's reattach redraw arrives once and never repeats.
         // The 'R' handler below kicks a flush as soon as the WebView is up.
         pendingFramesRef.current.push(new Uint8Array(data));
+        onDbgBytes(data.byteLength);
         if (!webReadyRef.current) return;
         if (!flushScheduledRef.current) {
           flushScheduledRef.current = true;
@@ -604,7 +640,7 @@ function TabView({
       // every focus-driven cfg refresh, causing onBinary to drop every
       // frame and presenting as "connected but black + no input".
     };
-  }, [cfg, tab.id, onStatus, flushPending, registerClient]);
+  }, [cfg, tab.id, onStatus, flushPending, registerClient, onDbgBytes]);
 
   // React to active-state changes. Becoming active clears the idle timer and
   // kicks a reconnect if needed; becoming inactive starts the countdown.
@@ -688,6 +724,11 @@ function TabView({
         }
         return;
       }
+      // 'D' = diagnostic phase marker from the WebView IIFE
+      if (prefix === 68) {
+        onDbg(raw.slice(1));
+        return;
+      }
       // 'B' = buffer dump response (utf-8 base64)
       if (prefix === 66) {
         const payload = raw.slice(1);
@@ -705,7 +746,7 @@ function TabView({
         return;
       }
     },
-    [onBuffer, flushPending],
+    [onBuffer, flushPending, onDbg],
   );
 
   const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);
@@ -719,10 +760,22 @@ function TabView({
     return () => registerWeb(tab.id, null);
   }, [registerWeb, tab.id]);
 
+  // onTouchEnd here is purely diagnostic — it doesn't claim the responder,
+  // so the WebView still receives the touch normally for xterm focus and
+  // scrollback. The counter tells us whether taps even reach the wrapping
+  // View when the cold-start "tap does nothing" symptom appears.
   return (
     <View
       style={[styles.tabView, !active && styles.tabViewHidden]}
       pointerEvents={active ? "auto" : "none"}
+      onTouchEnd={() => {
+        onDbgTap();
+        // Defensive: also force-focus the xterm helper textarea on every
+        // tap. If something below is eating the WebView's native focus
+        // path, this brings the keyboard up regardless. injectJavaScript
+        // is a no-op until the WebView has loaded.
+        webRef.current?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
+      }}
     >
       <WebView
         ref={webRef}
@@ -740,6 +793,7 @@ function TabView({
         overScrollMode="never"
         androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
         scrollEnabled={false}
+        webviewDebuggingEnabled
       />
     </View>
   );
@@ -828,6 +882,43 @@ function OfflineBanner({ status }: { status: WsStatus }) {
       )}
       <Text style={styles.bannerText}>
         {status === "connecting" ? "Reconnecting…" : "Offline — will retry"}
+      </Text>
+    </View>
+  );
+}
+
+// One-line diagnostic overlay pinned to the top of the terminal area while
+// we chase the "connected, black, no input" symptom. Fields:
+//   ws    : WebSocket status
+//   R     : has the WebView IIFE fired the post('R') handshake yet?
+//   B     : total bytes received from the server since mount (incl. ones
+//           buffered before R)
+//   T     : taps the wrapping View has seen (counted via onTouchEnd, which
+//           does NOT claim the responder, so the WebView/xterm still get
+//           the touch — this is purely a "did the tap reach RN at all"
+//           probe)
+//   last  : most recent 'D<text>' the IIFE posted, including any error
+function DebugOverlay({
+  status,
+  ready,
+  bytes,
+  taps,
+  last,
+}: {
+  status: WsStatus;
+  ready: boolean;
+  bytes: number;
+  taps: number;
+  last: string;
+}) {
+  const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps}`;
+  return (
+    <View style={styles.dbgOverlay} pointerEvents="none">
+      <Text style={styles.dbgText} numberOfLines={1}>
+        {summary}
+      </Text>
+      <Text style={styles.dbgText} numberOfLines={1}>
+        last: {last || "(none)"}
       </Text>
     </View>
   );
@@ -1081,6 +1172,23 @@ const styles = StyleSheet.create({
       android: "monospace",
       default: "monospace",
     }),
+  },
+
+  dbgOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(20, 21, 28, 0.85)",
+    borderBottomWidth: 1,
+    borderBottomColor: "#2a2d3d",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  dbgText: {
+    color: "#9ece6a",
+    fontSize: 10,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
   },
 
   banner: {
