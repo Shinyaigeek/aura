@@ -427,6 +427,8 @@ export default function TerminalScreen({ navigation }: Props) {
         earlyEntries={dbgEarlyEntries}
         renders={dbgRenders}
         screenInstance={screenInstance}
+        tabsCount={tabsState?.tabs.length ?? 0}
+        tabIds={tabsState?.tabs.slice(0, 6).map((t) => t.id) ?? []}
         last={dbgLast}
       />
 
@@ -1034,6 +1036,8 @@ function DebugOverlay({
   earlyEntries,
   renders,
   screenInstance,
+  tabsCount,
+  tabIds,
   last,
 }: {
   status: WsStatus;
@@ -1045,13 +1049,19 @@ function DebugOverlay({
   earlyEntries: number;
   renders: number;
   screenInstance: number;
+  tabsCount: number;
+  tabIds: readonly string[];
   last: string;
 }) {
   const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps} M:${mounts} U:${unmounts} E:${earlyEntries} Re:${renders} S:${screenInstance}`;
+  const tabsLine = `tabs:${tabsCount} [${tabIds.join(",")}]`;
   return (
     <View style={styles.dbgOverlay} pointerEvents="none">
       <Text style={styles.dbgText} numberOfLines={1}>
         {summary}
+      </Text>
+      <Text style={styles.dbgText} numberOfLines={1}>
+        {tabsLine}
       </Text>
       <Text style={styles.dbgText} numberOfLines={2}>
         {last || "(no D yet)"}
