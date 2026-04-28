@@ -53,7 +53,19 @@ type Props = NativeStackScreenProps<RootStackParamList, "Terminal">;
 // switch-back). One hour matches the user's stated intent.
 const IDLE_DETACH_MS = 60 * 60 * 1000;
 
+// Module-scope counter that survives TerminalScreen unmount/remount cycles.
+// useState's initialiser runs once per component instance, so each fresh
+// mount of TerminalScreen reads + increments this and gets a higher id.
+// Surfaced in the overlay as `S:<id>` — if M:5 came with S:5 then the whole
+// screen is remounting (likely react-navigation churn); if M:5 came with
+// S:1 then TabView alone is bouncing inside a stable TerminalScreen.
+let _screenInstanceCounter = 0;
+
 export default function TerminalScreen({ navigation }: Props) {
+  const [screenInstance] = useState<number>(() => {
+    _screenInstanceCounter += 1;
+    return _screenInstanceCounter;
+  });
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
   const [tabsState, setTabsState] = useState<TabsState | null>(null);
   const [statuses, setStatuses] = useState<Record<string, WsStatus>>({});
@@ -388,6 +400,7 @@ export default function TerminalScreen({ navigation }: Props) {
         taps={dbgTaps}
         mounts={dbgMounts}
         unmounts={dbgUnmounts}
+        screenInstance={screenInstance}
         last={dbgLast}
       />
 
@@ -992,6 +1005,7 @@ function DebugOverlay({
   taps,
   mounts,
   unmounts,
+  screenInstance,
   last,
 }: {
   status: WsStatus;
@@ -1000,9 +1014,10 @@ function DebugOverlay({
   taps: number;
   mounts: number;
   unmounts: number;
+  screenInstance: number;
   last: string;
 }) {
-  const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps} M:${mounts} U:${unmounts}`;
+  const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps} M:${mounts} U:${unmounts} S:${screenInstance}`;
   return (
     <View style={styles.dbgOverlay} pointerEvents="none">
       <Text style={styles.dbgText} numberOfLines={1}>
