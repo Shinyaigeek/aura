@@ -71,7 +71,12 @@ export default function TerminalScreen({ navigation }: Props) {
   const [dbgTaps, setDbgTaps] = useState<number>(0);
   const [dbgReady, setDbgReady] = useState<boolean>(false);
   const onDbg = useCallback((line: string) => {
-    setDbgLast(line);
+    setDbgLast((prev) => {
+      // Accumulate the trail so the overlay shows the sequence, not just
+      // the most recent marker. Cap so the line stays readable on a phone.
+      const next = prev ? `${prev} > ${line}` : line;
+      return next.length > 140 ? `…${next.slice(-139)}` : next;
+    });
     if (line === "R-sent") setDbgReady(true);
   }, []);
   const onDbgBytes = useCallback((n: number) => {
@@ -794,6 +799,23 @@ function TabView({
         androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
         scrollEnabled={false}
         webviewDebuggingEnabled
+        // Diagnostic probes that don't depend on the inline IIFE running.
+        // If the IIFE is silent (no 'D' messages) but `wv:loadend` lands,
+        // we know the document loaded — so the issue is either inline
+        // script execution or the ReactNativeWebView bridge being broken
+        // by the time the IIFE runs. injectedJavaScriptBeforeContentLoaded
+        // pings before any page script, which discriminates between the
+        // two: 'bcl' + no 'script-start' = inline-script-blocked; neither
+        // = bridge dead.
+        onLoadStart={() => onDbg("wv:loadstart")}
+        onLoadEnd={() => onDbg("wv:loadend")}
+        onError={(e) =>
+          onDbg(`wv:err:${e.nativeEvent.code ?? "?"}:${e.nativeEvent.description ?? ""}`)
+        }
+        onHttpError={(e) => onDbg(`wv:http:${e.nativeEvent.statusCode}`)}
+        injectedJavaScriptBeforeContentLoaded={
+          "(function(){try{var p=window.ReactNativeWebView&&window.ReactNativeWebView.postMessage;p&&p.call(window.ReactNativeWebView,'Dbcl');}catch(e){}})();true;"
+        }
       />
     </View>
   );
@@ -917,8 +939,8 @@ function DebugOverlay({
       <Text style={styles.dbgText} numberOfLines={1}>
         {summary}
       </Text>
-      <Text style={styles.dbgText} numberOfLines={1}>
-        last: {last || "(none)"}
+      <Text style={styles.dbgText} numberOfLines={2}>
+        {last || "(no D yet)"}
       </Text>
     </View>
   );
