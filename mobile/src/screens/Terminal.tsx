@@ -2,7 +2,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useFocusEffect } from "@react-navigation/native";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -578,7 +578,9 @@ type TabViewProps = {
 // xterm buffer survive tab switches. The WebSocket, in contrast, is dropped
 // after IDLE_DETACH_MS of being non-active — the server's tmux session keeps
 // running regardless.
-function TabView({
+const TabView = memo(TabViewImpl);
+
+function TabViewImpl({
   cfg,
   tab,
   active,
@@ -590,6 +592,18 @@ function TabView({
   onDbgBytes,
   onDbgTap,
 }: TabViewProps) {
+  // Diagnostic: log on TabView mount / unmount. If the trail shows
+  // multiple `tabview-mount` markers without intervening unmounts, the
+  // WebView is being recycled because TabView itself is remounting —
+  // which makes `useMemo([])` for source pointless (it re-evaluates on
+  // every fresh mount) and explains why the v0.0.13/0.0.14 trails kept
+  // looping bcl/loadstart without reaching the IIFE.
+  useEffect(() => {
+    onDbg(`tabview-mount#${tab.id}`);
+    return () => onDbg(`tabview-unmount#${tab.id}`);
+    // onDbg is referentially stable; tab.id is part of the marker.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const webRef = useRef<WebView | null>(null);
   const clientRef = useRef<WsClient | null>(null);
   const webReadyRef = useRef(false);
@@ -812,13 +826,19 @@ function TabView({
       "(function(){try{var p=window.ReactNativeWebView&&window.ReactNativeWebView.postMessage;p&&p.call(window.ReactNativeWebView,'Dbcl');}catch(e){}})();true;",
     [],
   );
+  // Inline `[styles.tabView, !active && ...]` allocates a fresh array on
+  // every render. RN normalises style arrays for the bridge, but on new
+  // arch + react-native-webview this can still translate to "the wrapping
+  // View is updated" which on Android can recycle children — including
+  // the WebView. Lock the reference per `active` value so the wrapping
+  // View only reconciles when active actually changes.
+  const wrapperStyle = useMemo(
+    () => (active ? styles.tabView : [styles.tabView, styles.tabViewHidden]),
+    [active],
+  );
 
   return (
-    <View
-      style={[styles.tabView, !active && styles.tabViewHidden]}
-      pointerEvents={active ? "auto" : "none"}
-      onTouchEnd={onTouchEnd}
-    >
+    <View style={wrapperStyle} pointerEvents={active ? "auto" : "none"} onTouchEnd={onTouchEnd}>
       <WebView
         ref={webRef}
         originWhitelist={["*"]}
