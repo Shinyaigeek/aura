@@ -16,12 +16,15 @@
 //   "R"                xterm is mounted and ready to receive
 //   "B<base64>"        full scrollback buffer dump (utf-8), in response to
 //                      __auraDumpBuffer() — used by the copy modal
-//   "D<text>"          diagnostic phase marker / error from inside the IIFE.
-//                      Used to trace cold-start init when the WebView ends
-//                      up black (no 'R', no input focus). Picked up by an
-//                      in-app debug overlay; kept around in releases because
-//                      the cost is microscopic and the field-debug value is
-//                      large.
+//
+// CRITICAL: this string is a TS template literal. Any `\n`, `\t`, `\\`,
+// or `${...}` inside the JS below is interpreted at template-expansion
+// time, so escape sequences that need to reach the WebView as JS source
+// must be doubled (e.g. write `'\\n'` to emit the two-character sequence
+// `\n`). `mobile/scripts/check-inline-html.ts` parses the rendered
+// `<script>` body in CI to catch regressions of that mistake — which
+// shipped silently from v0.0.7 to v0.0.21 and broke cold start on every
+// Android build.
 export const terminalHtml = `<!doctype html>
 <html>
 <head>
@@ -43,16 +46,6 @@ export const terminalHtml = `<!doctype html>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
 <script>
   (function () {
-    var rnPost = window.ReactNativeWebView && window.ReactNativeWebView.postMessage;
-    function post(s) { if (rnPost) rnPost.call(window.ReactNativeWebView, s); }
-    function dbg(s) { post('D' + s); }
-    window.addEventListener('error', function (e) {
-      dbg('window-err:' + ((e && e.message) || 'unknown'));
-    });
-    dbg('script-start');
-    if (!window.Terminal) { dbg('err:no-Terminal'); return; }
-    if (!window.FitAddon) { dbg('err:no-FitAddon'); return; }
-    try {
     var term = new window.Terminal({
       cursorBlink: true,
       cursorStyle: 'bar',
@@ -88,14 +81,12 @@ export const terminalHtml = `<!doctype html>
       smoothScrollDuration: 0,
       macOptionIsMeta: true,
     });
-    dbg('term-created');
     var fit = new window.FitAddon.FitAddon();
     term.loadAddon(fit);
-    dbg('fit-loaded');
-    var termEl = document.getElementById('term');
-    if (!termEl) { dbg('err:no-#term'); return; }
-    term.open(termEl);
-    dbg('term-opened');
+    term.open(document.getElementById('term'));
+
+    var rnPost = window.ReactNativeWebView && window.ReactNativeWebView.postMessage;
+    function post(s) { if (rnPost) rnPost.call(window.ReactNativeWebView, s); }
 
     term.onData(function (data) {
       // Fast path: encode input bytes directly to base64 via btoa.
@@ -173,13 +164,13 @@ export const terminalHtml = `<!doctype html>
     // fires from a swipe. Translate single-finger vertical drags into
     // term.scrollLines() calls; short taps still fall through to xterm so the
     // keyboard comes up.
+    var termEl = document.getElementById('term');
     var touchStartY = 0;
     var touchStartX = 0;
     var touchLastY = 0;
     var touchScrolling = false;
     var touchAccum = 0;
     termEl.addEventListener('touchstart', function (e) {
-      dbg('touchstart#' + e.touches.length);
       if (e.touches.length !== 1) return;
       touchStartY = touchLastY = e.touches[0].clientY;
       touchStartX = e.touches[0].clientX;
@@ -208,19 +199,11 @@ export const terminalHtml = `<!doctype html>
       }
     }, { passive: false });
 
-    dbg('handlers-ready');
-
     // Initial handshake once layout has settled.
     requestAnimationFrame(function () {
-      dbg('raf');
       sendResize();
-      dbg('r-sent');
       post('R');
-      dbg('R-sent');
     });
-    } catch (e) {
-      dbg('iife-err:' + ((e && e.message) || String(e)));
-    }
   })();
 </script>
 </body>

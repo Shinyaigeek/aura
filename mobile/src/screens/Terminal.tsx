@@ -53,19 +53,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "Terminal">;
 // switch-back). One hour matches the user's stated intent.
 const IDLE_DETACH_MS = 60 * 60 * 1000;
 
-// Module-scope counter that survives TerminalScreen unmount/remount cycles.
-// useState's initialiser runs once per component instance, so each fresh
-// mount of TerminalScreen reads + increments this and gets a higher id.
-// Surfaced in the overlay as `S:<id>` — if M:5 came with S:5 then the whole
-// screen is remounting (likely react-navigation churn); if M:5 came with
-// S:1 then TabView alone is bouncing inside a stable TerminalScreen.
-let _screenInstanceCounter = 0;
-
 export default function TerminalScreen({ navigation }: Props) {
-  const [screenInstance] = useState<number>(() => {
-    _screenInstanceCounter += 1;
-    return _screenInstanceCounter;
-  });
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
   const [tabsState, setTabsState] = useState<TabsState | null>(null);
   const [statuses, setStatuses] = useState<Record<string, WsStatus>>({});
@@ -73,70 +61,6 @@ export default function TerminalScreen({ navigation }: Props) {
   const [pendingUpload, setPendingUpload] = useState<PickedFile | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [copyText, setCopyText] = useState<string | null>(null);
-  // Diagnostic state for the cold-start "connected, black, no input" bug.
-  // The active TabView reports phase markers, byte counts, and tap counts
-  // here; DebugOverlay paints a one-line summary on top of the screen so we
-  // can tell on the device whether xterm even initialised, whether bytes
-  // are reaching it, and whether taps reach the WebView at all.
-  const [dbgLast, setDbgLast] = useState<string>("");
-  const [dbgBytes, setDbgBytes] = useState<number>(0);
-  const [dbgTaps, setDbgTaps] = useState<number>(0);
-  const [dbgReady, setDbgReady] = useState<boolean>(false);
-  // Mount/unmount counters live as their own state fields so they survive
-  // the trail's 140-char truncation. v0.0.15 logged tabview-mount into the
-  // trail but the rapid bcl/loadstart loop pushed it out of the window
-  // before the user could read it.
-  const [dbgMounts, setDbgMounts] = useState<number>(0);
-  const [dbgUnmounts, setDbgUnmounts] = useState<number>(0);
-  // ER counts how many times TerminalScreen entered an early-return branch
-  // (cfg invalid OR tabsState null). If TabView is remounting because the
-  // parent flips between "render TabView" and "render empty state", this
-  // climbs in lock-step with M. R counts TerminalScreen renders, flushed at
-  // 1 Hz from a ref so display itself doesn't add re-render pressure.
-  const [dbgEarlyEntries, setDbgEarlyEntries] = useState<number>(0);
-  const [dbgRenders, setDbgRenders] = useState<number>(0);
-  const dbgRendersRef = useRef(0);
-  dbgRendersRef.current += 1;
-  const dbgLastBranchRef = useRef<string>("init");
-  // Bytes/taps go through refs first and are flushed to state on a 1Hz
-  // interval. v0.0.13 routed them straight into setState on every event,
-  // which on a chatty session (tmux status bar emits bytes constantly)
-  // turned into hundreds of state updates per second. Each re-render
-  // passed new inline-arrow callbacks to <WebView>; react-native-webview
-  // 13.x apparently treats that as enough of a prop change to recycle
-  // the underlying WebView, which is why the v0.0.13 trail showed
-  // bcl/loadstart/loadend repeating without ever reaching script-start.
-  const dbgBytesRef = useRef(0);
-  const dbgTapsRef = useRef(0);
-  const onDbg = useCallback((line: string) => {
-    setDbgLast((prev) => {
-      // Accumulate the trail so the overlay shows the sequence, not just
-      // the most recent marker. Cap so the line stays readable on a phone.
-      const next = prev ? `${prev} > ${line}` : line;
-      return next.length > 140 ? `…${next.slice(-139)}` : next;
-    });
-    if (line === "R-sent") setDbgReady(true);
-  }, []);
-  const onDbgBytes = useCallback((n: number) => {
-    dbgBytesRef.current += n;
-  }, []);
-  const onDbgTap = useCallback(() => {
-    dbgTapsRef.current += 1;
-  }, []);
-  const onDbgMount = useCallback(() => {
-    setDbgMounts((prev) => prev + 1);
-  }, []);
-  const onDbgUnmount = useCallback(() => {
-    setDbgUnmounts((prev) => prev + 1);
-  }, []);
-  useEffect(() => {
-    const id = setInterval(() => {
-      setDbgBytes((prev) => (prev === dbgBytesRef.current ? prev : dbgBytesRef.current));
-      setDbgTaps((prev) => (prev === dbgTapsRef.current ? prev : dbgTapsRef.current));
-      setDbgRenders((prev) => (prev === dbgRendersRef.current ? prev : dbgRendersRef.current));
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -210,19 +134,6 @@ export default function TerminalScreen({ navigation }: Props) {
   useEffect(() => {
     if (tabsState) void saveTabs(tabsState);
   }, [tabsState]);
-
-  // Watch for the early-return branches that yank TabView out of the tree.
-  // Effects run after every committed render, so we can compare the branch
-  // we just rendered to the previous one and count transitions into the
-  // "early" branch. If E climbs lock-step with M, the cause is found.
-  useEffect(() => {
-    const inEarly = !cfg || !cfg.url || !cfg.token || !tabsState;
-    const branch = inEarly ? "early" : "full";
-    if (branch === "early" && dbgLastBranchRef.current !== "early") {
-      setDbgEarlyEntries((prev) => prev + 1);
-    }
-    dbgLastBranchRef.current = branch;
-  });
 
   const activeStatus: WsStatus = tabsState
     ? (statuses[tabsState.activeTabId] ?? "closed")
@@ -408,29 +319,10 @@ export default function TerminalScreen({ navigation }: Props) {
             registerClient={registerClient}
             registerWeb={registerWeb}
             onBuffer={handleBufferDump}
-            onDbg={onDbg}
-            onDbgBytes={onDbgBytes}
-            onDbgTap={onDbgTap}
-            onDbgMount={onDbgMount}
-            onDbgUnmount={onDbgUnmount}
           />
         ))}
       </View>
       {activeStatus !== "open" && <OfflineBanner status={activeStatus} />}
-      <DebugOverlay
-        status={activeStatus}
-        ready={dbgReady}
-        bytes={dbgBytes}
-        taps={dbgTaps}
-        mounts={dbgMounts}
-        unmounts={dbgUnmounts}
-        earlyEntries={dbgEarlyEntries}
-        renders={dbgRenders}
-        screenInstance={screenInstance}
-        tabsCount={tabsState?.tabs.length ?? 0}
-        tabIds={tabsState?.tabs.slice(0, 6).map((t) => t.id) ?? []}
-        last={dbgLast}
-      />
 
       <Modal
         visible={browserOpen}
@@ -625,11 +517,6 @@ type TabViewProps = {
   registerClient: (id: string, client: WsClient | null) => void;
   registerWeb: (id: string, web: WebView | null) => void;
   onBuffer: (text: string) => void;
-  onDbg: (line: string) => void;
-  onDbgBytes: (count: number) => void;
-  onDbgTap: () => void;
-  onDbgMount: () => void;
-  onDbgUnmount: () => void;
 };
 
 // One tab = one WebSocket + one WebView (with its own xterm.js instance).
@@ -637,6 +524,11 @@ type TabViewProps = {
 // xterm buffer survive tab switches. The WebSocket, in contrast, is dropped
 // after IDLE_DETACH_MS of being non-active — the server's tmux session keeps
 // running regardless.
+//
+// memo'd so a TerminalScreen re-render with unchanged props doesn't push
+// fresh callback identities into <WebView> on Android, which earlier
+// versions of react-native-webview reacted to by recycling the native
+// WebView.
 const TabView = memo(TabViewImpl);
 
 function TabViewImpl({
@@ -647,23 +539,7 @@ function TabViewImpl({
   registerClient,
   registerWeb,
   onBuffer,
-  onDbg,
-  onDbgBytes,
-  onDbgTap,
-  onDbgMount,
-  onDbgUnmount,
 }: TabViewProps) {
-  // Diagnostic: bump dedicated mount / unmount counters in the parent.
-  // Putting these in their own state fields (instead of the trail) means
-  // they survive past the trail's 140-char truncation, so the user can
-  // tell at a glance whether TabView is remounting in a loop without
-  // having to read a long string.
-  useEffect(() => {
-    onDbgMount();
-    return () => onDbgUnmount();
-    // Stable callbacks; we want exactly one call per real mount/unmount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   const webRef = useRef<WebView | null>(null);
   const clientRef = useRef<WsClient | null>(null);
   const webReadyRef = useRef(false);
@@ -720,7 +596,6 @@ function TabViewImpl({
         // the frame: tmux's reattach redraw arrives once and never repeats.
         // The 'R' handler below kicks a flush as soon as the WebView is up.
         pendingFramesRef.current.push(new Uint8Array(data));
-        onDbgBytes(data.byteLength);
         if (!webReadyRef.current) return;
         if (!flushScheduledRef.current) {
           flushScheduledRef.current = true;
@@ -747,7 +622,7 @@ function TabViewImpl({
       // every focus-driven cfg refresh, causing onBinary to drop every
       // frame and presenting as "connected but black + no input".
     };
-  }, [cfg, tab.id, onStatus, flushPending, registerClient, onDbgBytes]);
+  }, [cfg, tab.id, onStatus, flushPending, registerClient]);
 
   // React to active-state changes. Becoming active clears the idle timer and
   // kicks a reconnect if needed; becoming inactive starts the countdown.
@@ -831,11 +706,6 @@ function TabViewImpl({
         }
         return;
       }
-      // 'D' = diagnostic phase marker from the WebView IIFE
-      if (prefix === 68) {
-        onDbg(raw.slice(1));
-        return;
-      }
       // 'B' = buffer dump response (utf-8 base64)
       if (prefix === 66) {
         const payload = raw.slice(1);
@@ -853,7 +723,7 @@ function TabViewImpl({
         return;
       }
     },
-    [onBuffer, flushPending, onDbg],
+    [onBuffer, flushPending],
   );
 
   const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);
@@ -867,60 +737,18 @@ function TabViewImpl({
     return () => registerWeb(tab.id, null);
   }, [registerWeb, tab.id, webMounted]);
 
-  // Stabilise every callback we hand to <WebView>. v0.0.13 used inline
-  // arrows here; on a chatty session that pushed enough re-renders to
-  // make react-native-webview 13.x recycle the native WebView each time,
-  // looping forever on bcl→loadstart→loadend without the inline IIFE
-  // ever getting a chance to finish.
-  const onTouchEnd = useCallback(() => {
-    onDbgTap();
-    webRef.current?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
-  }, [onDbgTap]);
-  const onWvLoadStart = useCallback(() => onDbg("wv:loadstart"), [onDbg]);
-  const onWvLoadEnd = useCallback(() => onDbg("wv:loadend"), [onDbg]);
-  const onWvError = useCallback(
-    (e: { nativeEvent: { code?: number; description?: string } }) =>
-      onDbg(`wv:err:${e.nativeEvent.code ?? "?"}:${e.nativeEvent.description ?? ""}`),
-    [onDbg],
-  );
-  const onWvHttpError = useCallback(
-    (e: { nativeEvent: { statusCode: number } }) => onDbg(`wv:http:${e.nativeEvent.statusCode}`),
-    [onDbg],
-  );
-  const onWvRenderProcessGone = useCallback(
-    (e: { nativeEvent: { didCrash?: boolean } }) =>
-      onDbg(`wv:rpg:${e.nativeEvent.didCrash ? "crash" : "killed"}`),
-    [onDbg],
-  );
-  const injectedBcl = useMemo(
-    () =>
-      "(function(){try{var p=window.ReactNativeWebView&&window.ReactNativeWebView.postMessage;p&&p.call(window.ReactNativeWebView,'Dbcl');}catch(e){}})();true;",
-    [],
-  );
-  // Sibling probe: injectedJavaScript runs *after* the document and all
-  // its scripts have loaded. If `ijs` arrives but the inline IIFE's
-  // `script-start` doesn't, we know the document loaded fine and the
-  // bridge works at that point — the inline <script> tag itself isn't
-  // being executed (CSP, source URL mismatch, parser error before it).
-  // If neither shows, the bridge or the document didn't actually finish.
-  const injectedAfter = useMemo(
-    () =>
-      "(function(){try{var p=window.ReactNativeWebView&&window.ReactNativeWebView.postMessage;p&&p.call(window.ReactNativeWebView,'Dijs:T='+(typeof window.Terminal)+',F='+(typeof window.FitAddon));}catch(e){}})();true;",
-    [],
-  );
   // Inline `[styles.tabView, !active && ...]` allocates a fresh array on
-  // every render. RN normalises style arrays for the bridge, but on new
-  // arch + react-native-webview this can still translate to "the wrapping
-  // View is updated" which on Android can recycle children — including
-  // the WebView. Lock the reference per `active` value so the wrapping
-  // View only reconciles when active actually changes.
+  // every render. Lock the reference per `active` value so the wrapping
+  // View only reconciles when active actually changes — earlier RN/WebView
+  // combinations on Android recycled child WebViews when the wrapping
+  // View's prop identity moved on every parent re-render.
   const wrapperStyle = useMemo(
     () => (active ? styles.tabView : [styles.tabView, styles.tabViewHidden]),
     [active],
   );
 
   return (
-    <View style={wrapperStyle} pointerEvents={active ? "auto" : "none"} onTouchEnd={onTouchEnd}>
+    <View style={wrapperStyle} pointerEvents={active ? "auto" : "none"}>
       {webMounted && (
         <WebView
           ref={webRef}
@@ -938,14 +766,6 @@ function TabViewImpl({
           overScrollMode="never"
           androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
           scrollEnabled={false}
-          webviewDebuggingEnabled
-          onLoadStart={onWvLoadStart}
-          onLoadEnd={onWvLoadEnd}
-          onError={onWvError}
-          onHttpError={onWvHttpError}
-          onRenderProcessGone={onWvRenderProcessGone}
-          injectedJavaScriptBeforeContentLoaded={injectedBcl}
-          injectedJavaScript={injectedAfter}
         />
       )}
     </View>
@@ -1035,61 +855,6 @@ function OfflineBanner({ status }: { status: WsStatus }) {
       )}
       <Text style={styles.bannerText}>
         {status === "connecting" ? "Reconnecting…" : "Offline — will retry"}
-      </Text>
-    </View>
-  );
-}
-
-// One-line diagnostic overlay pinned to the top of the terminal area while
-// we chase the "connected, black, no input" symptom. Fields:
-//   ws    : WebSocket status
-//   R     : has the WebView IIFE fired the post('R') handshake yet?
-//   B     : total bytes received from the server since mount (incl. ones
-//           buffered before R)
-//   T     : taps the wrapping View has seen (counted via onTouchEnd, which
-//           does NOT claim the responder, so the WebView/xterm still get
-//           the touch — this is purely a "did the tap reach RN at all"
-//           probe)
-//   last  : most recent 'D<text>' the IIFE posted, including any error
-function DebugOverlay({
-  status,
-  ready,
-  bytes,
-  taps,
-  mounts,
-  unmounts,
-  earlyEntries,
-  renders,
-  screenInstance,
-  tabsCount,
-  tabIds,
-  last,
-}: {
-  status: WsStatus;
-  ready: boolean;
-  bytes: number;
-  taps: number;
-  mounts: number;
-  unmounts: number;
-  earlyEntries: number;
-  renders: number;
-  screenInstance: number;
-  tabsCount: number;
-  tabIds: readonly string[];
-  last: string;
-}) {
-  const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps} M:${mounts} U:${unmounts} E:${earlyEntries} Re:${renders} S:${screenInstance}`;
-  const tabsLine = `tabs:${tabsCount} [${tabIds.join(",")}]`;
-  return (
-    <View style={styles.dbgOverlay} pointerEvents="none">
-      <Text style={styles.dbgText} numberOfLines={1}>
-        {summary}
-      </Text>
-      <Text style={styles.dbgText} numberOfLines={1}>
-        {tabsLine}
-      </Text>
-      <Text style={styles.dbgText} numberOfLines={2}>
-        {last || "(no D yet)"}
       </Text>
     </View>
   );
@@ -1343,23 +1108,6 @@ const styles = StyleSheet.create({
       android: "monospace",
       default: "monospace",
     }),
-  },
-
-  dbgOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "rgba(20, 21, 28, 0.85)",
-    borderBottomWidth: 1,
-    borderBottomColor: "#2a2d3d",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  dbgText: {
-    color: "#9ece6a",
-    fontSize: 10,
-    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
   },
 
   banner: {

@@ -1,6 +1,6 @@
 {
   "name": "aura-mobile",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -13,7 +13,7 @@
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "check": "oxfmt --check && oxlint && tsc --noEmit",
+    "check": "oxfmt --check && oxlint && tsc --noEmit && bun run scripts/check-inline-html.ts",
     "fix": "oxfmt && oxlint --fix"
   },
   "dependencies": {
@@ -36,6 +36,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@babel/parser": "^7.29.2",
     "@types/react": "~18.2.79",
     "oxfmt": "^0.45.0",
     "oxlint": "^1.60.0",

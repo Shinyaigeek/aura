@@ -23,6 +23,7 @@
       },
       "devDependencies": {
         "@babel/core": "^7.25.2",
+        "@babel/parser": "^7.29.2",
         "@types/react": "~18.2.79",
         "oxfmt": "^0.45.0",
         "oxlint": "^1.60.0",
