@@ -675,6 +675,17 @@ function TabViewImpl({
   // down every time the tab toggled).
   const activeRef = useRef(active);
   activeRef.current = active;
+  // Sticky "has this tab ever been active" flag. We mount the WebView only
+  // for tabs that the user has actually visited. Without this, every tab
+  // in tabsState gets its own native WebView at startup — five tabs means
+  // five WebViews racing for the xterm CDN bundles, splitting the network
+  // budget and starving the active one too. Once a tab has been active
+  // we keep its WebView mounted so re-selecting it preserves scrollback
+  // and avoids a re-load.
+  const [webMounted, setWebMounted] = useState<boolean>(active);
+  useEffect(() => {
+    if (active && !webMounted) setWebMounted(true);
+  }, [active, webMounted]);
 
   const flushPending = useCallback(() => {
     flushScheduledRef.current = false;
@@ -848,13 +859,13 @@ function TabViewImpl({
   const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);
 
   // Publish this tab's WebView into the shared registry (used by the header
-  // copy button). Using a post-mount effect + direct ref object mirrors the
-  // v0.0.6 attachment shape exactly; switching to a callback ref in 0.0.7 had
-  // the WebView briefly detach/reattach during re-renders on Android.
+  // copy button). Re-runs when `webMounted` flips so the registry is empty
+  // until the WebView actually exists.
   useEffect(() => {
+    if (!webMounted) return;
     registerWeb(tab.id, webRef.current);
     return () => registerWeb(tab.id, null);
-  }, [registerWeb, tab.id]);
+  }, [registerWeb, tab.id, webMounted]);
 
   // Stabilise every callback we hand to <WebView>. v0.0.13 used inline
   // arrows here; on a chatty session that pushed enough re-renders to
@@ -899,30 +910,32 @@ function TabViewImpl({
 
   return (
     <View style={wrapperStyle} pointerEvents={active ? "auto" : "none"} onTouchEnd={onTouchEnd}>
-      <WebView
-        ref={webRef}
-        originWhitelist={["*"]}
-        source={source}
-        onMessage={onWebMessage}
-        javaScriptEnabled
-        domStorageEnabled
-        setSupportMultipleWindows={false}
-        keyboardDisplayRequiresUserAction={false}
-        hideKeyboardAccessoryView
-        style={styles.web}
-        automaticallyAdjustContentInsets={false}
-        contentInsetAdjustmentBehavior="never"
-        overScrollMode="never"
-        androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
-        scrollEnabled={false}
-        webviewDebuggingEnabled
-        onLoadStart={onWvLoadStart}
-        onLoadEnd={onWvLoadEnd}
-        onError={onWvError}
-        onHttpError={onWvHttpError}
-        onRenderProcessGone={onWvRenderProcessGone}
-        injectedJavaScriptBeforeContentLoaded={injectedBcl}
-      />
+      {webMounted && (
+        <WebView
+          ref={webRef}
+          originWhitelist={["*"]}
+          source={source}
+          onMessage={onWebMessage}
+          javaScriptEnabled
+          domStorageEnabled
+          setSupportMultipleWindows={false}
+          keyboardDisplayRequiresUserAction={false}
+          hideKeyboardAccessoryView
+          style={styles.web}
+          automaticallyAdjustContentInsets={false}
+          contentInsetAdjustmentBehavior="never"
+          overScrollMode="never"
+          androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
+          scrollEnabled={false}
+          webviewDebuggingEnabled
+          onLoadStart={onWvLoadStart}
+          onLoadEnd={onWvLoadEnd}
+          onError={onWvError}
+          onHttpError={onWvHttpError}
+          onRenderProcessGone={onWvRenderProcessGone}
+          injectedJavaScriptBeforeContentLoaded={injectedBcl}
+        />
+      )}
     </View>
   );
 }
