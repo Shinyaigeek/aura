@@ -573,8 +573,12 @@ function TabView({
     const client = new WsClient(cfg, tab.id, {
       onStatus: (s) => onStatus(tab.id, s),
       onBinary: (data) => {
-        if (!webReadyRef.current) return;
+        // Always buffer. Flushing is gated on webReadyRef so we don't call
+        // window.__auraWrite before xterm is mounted, but we must NOT drop
+        // the frame: tmux's reattach redraw arrives once and never repeats.
+        // The 'R' handler below kicks a flush as soon as the WebView is up.
         pendingFramesRef.current.push(new Uint8Array(data));
+        if (!webReadyRef.current) return;
         if (!flushScheduledRef.current) {
           flushScheduledRef.current = true;
           setTimeout(flushPending, 0);
@@ -594,7 +598,11 @@ function TabView({
       registerClient(tab.id, null);
       clientRef.current = null;
       pendingFramesRef.current = [];
-      webReadyRef.current = false;
+      // Don't reset webReadyRef: the WebView itself is not unmounting (its
+      // source is memoized [] and the TabView key is tab.id), so it won't
+      // re-fire 'R'. Resetting here previously froze the ref at false on
+      // every focus-driven cfg refresh, causing onBinary to drop every
+      // frame and presenting as "connected but black + no input".
     };
   }, [cfg, tab.id, onStatus, flushPending, registerClient]);
 
@@ -671,6 +679,13 @@ function TabView({
       if (prefix === 82) {
         webReadyRef.current = true;
         webRef.current?.injectJavaScript("window.__auraFit();window.__auraFocus();true;");
+        // Drain any frames that arrived while xterm was still loading. On
+        // cold start the WS often opens before the WebView finishes pulling
+        // the xterm CDN bundles, so the initial tmux redraw lands here.
+        if (pendingFramesRef.current.length > 0 && !flushScheduledRef.current) {
+          flushScheduledRef.current = true;
+          setTimeout(flushPending, 0);
+        }
         return;
       }
       // 'B' = buffer dump response (utf-8 base64)
@@ -690,7 +705,7 @@ function TabView({
         return;
       }
     },
-    [onBuffer],
+    [onBuffer, flushPending],
   );
 
   const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);
