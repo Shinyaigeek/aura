@@ -50,6 +50,14 @@ export class WsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pending = new Map<string, Pending>();
   private nextRequestId = 1;
+  // Last resize we tried to send. Replayed on every WS open so the server
+  // ends up with the right PTY size even if the WebView's one-shot
+  // handshake arrived while the socket was still CONNECTING (cold start)
+  // or after a reconnect. Without this, sendControl silently drops the
+  // resize, the PTY stays at tmux's default size, the new attach matches
+  // tmux's existing render size so no SIGWINCH redraw fires, and the
+  // mobile xterm renders nothing — the "connected, black, no input" state.
+  private lastResize: { type: "resize"; rows: number; cols: number } | null = null;
 
   constructor(
     private readonly cfg: ServerConfig,
@@ -121,6 +129,9 @@ export class WsClient {
   }
 
   sendControl(msg: ControlMessage): void {
+    if (msg.type === "resize") {
+      this.lastResize = msg;
+    }
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify(msg));
   }
@@ -203,6 +214,31 @@ export class WsClient {
     ws.onopen = () => {
       this.attempt = 0;
       this.cb.onStatus("open");
+      // Force tmux to redraw on attach by wiggling the PTY size: send a
+      // 1-row-shorter resize first, then the real one. Two reasons we
+      // need both messages:
+      //   1. Replay covers the cold-start race where the WebView's
+      //      one-shot 'r' arrived while this socket was CONNECTING and
+      //      sendControl silently dropped it. Without the replay the
+      //      server stays at tmux's default size.
+      //   2. The wiggle covers the reattach case where the size matches
+      //      what the previous client used. Linux skips SIGWINCH on
+      //      same-size TIOCSWINSZ, so without a real size change tmux
+      //      never knows a new client has joined and never redraws —
+      //      mobile's fresh xterm sits empty even though the session
+      //      has content. The shorter intermediate size guarantees a
+      //      SIGWINCH and a follow-up redraw at the correct size.
+      if (this.lastResize) {
+        const r = this.lastResize;
+        try {
+          if (r.rows > 1) {
+            ws.send(JSON.stringify({ type: "resize", rows: r.rows - 1, cols: r.cols }));
+          }
+          ws.send(JSON.stringify(r));
+        } catch {
+          // ignore — onclose will drive reconnect
+        }
+      }
     };
 
     ws.onmessage = (event: WebSocketMessageEvent) => {
