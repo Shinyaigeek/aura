@@ -88,6 +88,16 @@ export default function TerminalScreen({ navigation }: Props) {
   // before the user could read it.
   const [dbgMounts, setDbgMounts] = useState<number>(0);
   const [dbgUnmounts, setDbgUnmounts] = useState<number>(0);
+  // ER counts how many times TerminalScreen entered an early-return branch
+  // (cfg invalid OR tabsState null). If TabView is remounting because the
+  // parent flips between "render TabView" and "render empty state", this
+  // climbs in lock-step with M. R counts TerminalScreen renders, flushed at
+  // 1 Hz from a ref so display itself doesn't add re-render pressure.
+  const [dbgEarlyEntries, setDbgEarlyEntries] = useState<number>(0);
+  const [dbgRenders, setDbgRenders] = useState<number>(0);
+  const dbgRendersRef = useRef(0);
+  dbgRendersRef.current += 1;
+  const dbgLastBranchRef = useRef<string>("init");
   // Bytes/taps go through refs first and are flushed to state on a 1Hz
   // interval. v0.0.13 routed them straight into setState on every event,
   // which on a chatty session (tmux status bar emits bytes constantly)
@@ -123,6 +133,7 @@ export default function TerminalScreen({ navigation }: Props) {
     const id = setInterval(() => {
       setDbgBytes((prev) => (prev === dbgBytesRef.current ? prev : dbgBytesRef.current));
       setDbgTaps((prev) => (prev === dbgTapsRef.current ? prev : dbgTapsRef.current));
+      setDbgRenders((prev) => (prev === dbgRendersRef.current ? prev : dbgRendersRef.current));
     }, 1000);
     return () => clearInterval(id);
   }, []);
@@ -199,6 +210,19 @@ export default function TerminalScreen({ navigation }: Props) {
   useEffect(() => {
     if (tabsState) void saveTabs(tabsState);
   }, [tabsState]);
+
+  // Watch for the early-return branches that yank TabView out of the tree.
+  // Effects run after every committed render, so we can compare the branch
+  // we just rendered to the previous one and count transitions into the
+  // "early" branch. If E climbs lock-step with M, the cause is found.
+  useEffect(() => {
+    const inEarly = !cfg || !cfg.url || !cfg.token || !tabsState;
+    const branch = inEarly ? "early" : "full";
+    if (branch === "early" && dbgLastBranchRef.current !== "early") {
+      setDbgEarlyEntries((prev) => prev + 1);
+    }
+    dbgLastBranchRef.current = branch;
+  });
 
   const activeStatus: WsStatus = tabsState
     ? (statuses[tabsState.activeTabId] ?? "closed")
@@ -400,6 +424,8 @@ export default function TerminalScreen({ navigation }: Props) {
         taps={dbgTaps}
         mounts={dbgMounts}
         unmounts={dbgUnmounts}
+        earlyEntries={dbgEarlyEntries}
+        renders={dbgRenders}
         screenInstance={screenInstance}
         last={dbgLast}
       />
@@ -1005,6 +1031,8 @@ function DebugOverlay({
   taps,
   mounts,
   unmounts,
+  earlyEntries,
+  renders,
   screenInstance,
   last,
 }: {
@@ -1014,10 +1042,12 @@ function DebugOverlay({
   taps: number;
   mounts: number;
   unmounts: number;
+  earlyEntries: number;
+  renders: number;
   screenInstance: number;
   last: string;
 }) {
-  const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps} M:${mounts} U:${unmounts} S:${screenInstance}`;
+  const summary = `ws:${status} R:${ready ? "Y" : "N"} B:${bytes} T:${taps} M:${mounts} U:${unmounts} E:${earlyEntries} Re:${renders} S:${screenInstance}`;
   return (
     <View style={styles.dbgOverlay} pointerEvents="none">
       <Text style={styles.dbgText} numberOfLines={1}>
