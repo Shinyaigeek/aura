@@ -5,6 +5,7 @@
     "scheme": "aura",
     "version": "0.0.23",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -21,6 +22,7 @@
     "android": {
       "package": "dev.shinyaigeek.aura",
       "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#0b0b0b"
       },
       "splash": {
