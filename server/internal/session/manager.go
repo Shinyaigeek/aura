@@ -21,10 +21,12 @@ import (
 // Manager owns the set of live Sessions.
 type Manager struct {
 	defaultShell string
-	// extraEnv is applied to every spawned shell (via tmux `-e`). Used to
-	// expose AURA_SESSION_ID / AURA_URL / AURA_TOKEN so hook scripts running
-	// under Claude Code can call back into this server without needing any
-	// side-channel config.
+	// extraEnv is applied to every spawned shell. Mirrored into the tmux
+	// invocation's process env so the tmux server (created by the first
+	// `new-session -A`) inherits these vars and hands them to every shell it
+	// later spawns. Used to expose AURA_SESSION_ID / AURA_URL / AURA_TOKEN so
+	// hook scripts running under Claude Code can call back into this server
+	// without needing any side-channel config.
 	extraEnv func(id string) []string
 
 	mu       sync.Mutex
@@ -138,13 +140,13 @@ func startSession(id, shell string, extraEnv []string) (*Session, error) {
 	// unrelated repo). Reattaches to existing sessions ignore -c and keep
 	// their pane's cwd, which is what we want.
 	startDir, _ := os.UserHomeDir()
-	args := tmux.EnsureArgs(id, shell, startDir, extraEnv...)
+	args := tmux.EnsureArgs(id, shell, startDir)
 	cmd := exec.Command("tmux", args...)
-	// Inherit env but force a reasonable TERM so tmux renders correctly. Also
-	// mirror extraEnv into our own process env so that when tmux creates a
-	// fresh session it inherits AURA_* for the shell (tmux's `-e` only kicks
-	// in on creation, but we want the same vars visible even if tmux decided
-	// to pull them from the parent env).
+	// Inherit env but force a reasonable TERM so tmux renders correctly.
+	// extraEnv is appended so the tmux server (spawned by this `new-session
+	// -A` if no server is running yet) inherits AURA_* and propagates them to
+	// every shell. We used to also pass `tmux -e KEY=VAL` for per-session env,
+	// but that flag requires tmux >= 3.2 which Ubuntu 20.04 doesn't ship.
 	baseEnv := append(os.Environ(), "TERM=xterm-256color")
 	baseEnv = append(baseEnv, extraEnv...)
 	cmd.Env = baseEnv

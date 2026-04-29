@@ -50,19 +50,15 @@ func Exists(id string) (bool, error) {
 // server happened to be launched from). Tmux ignores `-c` on the attach branch
 // of `-A`, so live sessions keep their current pane cwd.
 //
-// `env` entries (KEY=VALUE) are passed as tmux `-e` flags so they live in the
-// session environment; they are only honored when the session is actually
-// created, not on a plain attach.
-func EnsureArgs(id, shell, startDir string, env ...string) []string {
+// Per-session env injection used to live here as `-e KEY=VAL`, but `new-session
+// -e` requires tmux >= 3.2 which Ubuntu 20.04 (3.0a) doesn't ship. Callers now
+// propagate AURA_* via the parent process env (cmd.Env in session.startSession);
+// the first `new-session -A` spawns the tmux server, which inherits that env
+// and hands it to every shell it later creates.
+func EnsureArgs(id, shell, startDir string) []string {
 	args := []string{"new-session", "-A"}
 	if startDir != "" {
 		args = append(args, "-c", startDir)
-	}
-	for _, kv := range env {
-		if kv == "" {
-			continue
-		}
-		args = append(args, "-e", kv)
 	}
 	args = append(args, "-s", SessionName(id), shell)
 	return args
