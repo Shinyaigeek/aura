@@ -109,7 +109,12 @@ fi
 
 log "Reloading systemd and starting aura-server"
 systemctl daemon-reload
-systemctl enable --now aura-server
+systemctl enable aura-server
+# Always `restart`, never `start --now`. On upgrades the unit is already
+# running, and `enable --now` is a no-op for an active unit — so the new
+# binary on disk would never be loaded into memory until the user manually
+# rebooted. `restart` works for both fresh installs and upgrades.
+systemctl restart aura-server
 
 sleep 1
 systemctl --no-pager status aura-server | head -n 12 || true
