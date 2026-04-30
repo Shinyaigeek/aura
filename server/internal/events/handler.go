@@ -29,7 +29,7 @@ func NewHandler(hub *Hub) http.Handler {
 			slog.Error("events ws upgrade failed", "err", err)
 			return
 		}
-		defer conn.Close(websocket.StatusInternalError, "")
+		defer func() { _ = conn.Close(websocket.StatusInternalError, "") }()
 
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
