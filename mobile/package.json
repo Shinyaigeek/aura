@@ -1,6 +1,6 @@
 {
   "name": "aura-mobile",
-  "version": "0.0.24",
+  "version": "0.0.25",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -17,6 +17,7 @@
     "fix": "oxfmt && oxlint --fix"
   },
   "dependencies": {
+    "@notifee/react-native": "^9.1.8",
     "@react-native-async-storage/async-storage": "1.23.1",
     "@react-navigation/native": "^6.1.18",
     "@react-navigation/native-stack": "^6.11.0",

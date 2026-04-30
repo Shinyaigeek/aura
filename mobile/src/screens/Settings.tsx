@@ -7,13 +7,21 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
 
 import type { RootStackParamList } from "../../App";
-import { loadConfig, saveConfig, type ServerConfig } from "@/lib/storage";
+import {
+  loadConfig,
+  loadPrefs,
+  type Prefs,
+  saveConfig,
+  savePrefs,
+  type ServerConfig,
+} from "@/lib/storage";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Settings">;
 
@@ -21,15 +29,23 @@ type FieldKey = "url" | "token";
 
 export default function SettingsScreen({ navigation }: Props) {
   const [cfg, setCfg] = useState<ServerConfig>({ url: "", token: "" });
+  const [prefs, setPrefs] = useState<Prefs>({ keepAliveInBackground: false });
   const [loaded, setLoaded] = useState(false);
   const [focused, setFocused] = useState<FieldKey | null>(null);
 
   useEffect(() => {
-    loadConfig().then((c) => {
+    Promise.all([loadConfig(), loadPrefs()]).then(([c, p]) => {
       setCfg(c);
+      setPrefs(p);
       setLoaded(true);
     });
   }, []);
+
+  const onToggleKeepAlive = (value: boolean) => {
+    const next: Prefs = { ...prefs, keepAliveInBackground: value };
+    setPrefs(next);
+    void savePrefs(next);
+  };
 
   const onSave = async () => {
     const trimmed: ServerConfig = {
@@ -110,6 +126,25 @@ export default function SettingsScreen({ navigation }: Props) {
         >
           <Text style={styles.saveButtonText}>Save & connect</Text>
         </Pressable>
+
+        {Platform.OS === "android" && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Background</Text>
+            <Text style={styles.cardSubtitle}>
+              Keep aura listening for events for a few minutes after you switch away. A persistent
+              notification stays in your tray while this is on (Android only).
+            </Text>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Keep alive in background</Text>
+              <Switch
+                value={prefs.keepAliveInBackground}
+                onValueChange={onToggleKeepAlive}
+                trackColor={{ false: "#242634", true: "#3b4262" }}
+                thumbColor={prefs.keepAliveInBackground ? "#7aa2f7" : "#6b7089"}
+              />
+            </View>
+          </View>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -189,5 +224,18 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 16,
     letterSpacing: 0.3,
+  },
+
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  toggleLabel: {
+    color: "#e4e6ef",
+    fontSize: 14,
+    fontWeight: "500",
+    flex: 1,
+    marginRight: 12,
   },
 });

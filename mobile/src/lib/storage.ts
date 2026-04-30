@@ -17,8 +17,23 @@ export type TabsState = {
 
 const CONFIG_KEY = "aura.server-config.v1";
 const TABS_KEY = "aura.tabs.v1";
+const PREFS_KEY = "aura.prefs.v1";
 
 const defaultConfig: ServerConfig = { url: "", token: "" };
+
+// Prefs is for app-level toggles that don't fit on the Connection card —
+// notably the foreground-service opt-in. Persisted in its own AsyncStorage
+// key so a future migration to a Settings sub-screen doesn't have to
+// touch ServerConfig.
+export type Prefs = {
+  // Keep aura alive in the background via a foreground service.
+  // Trade-off: a persistent notification stays in the user's tray as
+  // long as it's on, in exchange for ~3 min of background uptime
+  // (Notifee uses Android's shortService type).
+  keepAliveInBackground: boolean;
+};
+
+const defaultPrefs: Prefs = { keepAliveInBackground: false };
 
 const defaultTabs: TabsState = {
   tabs: [{ id: "default", label: "default" }],
@@ -55,6 +70,33 @@ export function subscribeConfig(listener: (cfg: ServerConfig) => void): () => vo
   configListeners.add(listener);
   return () => {
     configListeners.delete(listener);
+  };
+}
+
+export async function loadPrefs(): Promise<Prefs> {
+  const raw = await AsyncStorage.getItem(PREFS_KEY);
+  if (!raw) return defaultPrefs;
+  try {
+    const parsed = JSON.parse(raw) as Partial<Prefs>;
+    return {
+      keepAliveInBackground: parsed.keepAliveInBackground === true,
+    };
+  } catch {
+    return defaultPrefs;
+  }
+}
+
+export async function savePrefs(prefs: Prefs): Promise<void> {
+  await AsyncStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  for (const l of prefsListeners) l(prefs);
+}
+
+const prefsListeners = new Set<(p: Prefs) => void>();
+
+export function subscribePrefs(listener: (p: Prefs) => void): () => void {
+  prefsListeners.add(listener);
+  return () => {
+    prefsListeners.delete(listener);
   };
 }
 

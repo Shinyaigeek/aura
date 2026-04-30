@@ -5,8 +5,16 @@ import { useEffect, useState } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { useEventsClient } from "@/lib/events-client";
+import { useForegroundService } from "@/lib/foreground";
 import { useNotificationPermission } from "@/lib/push";
-import { loadConfig, type ServerConfig, subscribeConfig } from "@/lib/storage";
+import {
+  loadConfig,
+  loadPrefs,
+  type Prefs,
+  type ServerConfig,
+  subscribeConfig,
+  subscribePrefs,
+} from "@/lib/storage";
 import SettingsScreen from "@/screens/Settings";
 import TerminalScreen from "@/screens/Terminal";
 
@@ -18,17 +26,26 @@ export type RootStackParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
-  // cfg lives at the App root so the /events subscription survives
-  // navigation between Terminal and Settings. subscribeConfig refreshes
-  // it whenever the user saves new credentials.
+  // cfg + prefs live at the App root so the /events subscription and
+  // the foreground service survive navigation between Terminal and
+  // Settings. subscribeConfig / subscribePrefs refresh state whenever
+  // the user saves changes.
   const [cfg, setCfg] = useState<ServerConfig | null>(null);
+  const [prefs, setPrefs] = useState<Prefs | null>(null);
   useEffect(() => {
     void loadConfig().then(setCfg);
-    return subscribeConfig(setCfg);
+    void loadPrefs().then(setPrefs);
+    const unsubCfg = subscribeConfig(setCfg);
+    const unsubPrefs = subscribePrefs(setPrefs);
+    return () => {
+      unsubCfg();
+      unsubPrefs();
+    };
   }, []);
 
   useNotificationPermission(cfg);
   useEventsClient(cfg);
+  useForegroundService(prefs?.keepAliveInBackground ?? false);
 
   return (
     <SafeAreaProvider>
