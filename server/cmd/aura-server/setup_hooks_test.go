@@ -8,21 +8,28 @@ import (
 	"testing"
 )
 
-func TestPatchStopHooks_EmptySettings(t *testing.T) {
+func TestPatchHooks_EmptySettings(t *testing.T) {
 	settings := map[string]any{}
-	patchStopHooks(settings)
+	patchHooks(settings)
 
-	stop := stopEntries(t, settings)
+	stop := eventEntries(t, settings, "Stop")
 	if len(stop) != 1 {
 		t.Fatalf("want 1 Stop block, got %d", len(stop))
 	}
-	cmd := firstCommand(t, stop[0])
-	if !strings.Contains(cmd, auraHookMarker) {
-		t.Errorf("command missing marker: %q", cmd)
+	if !strings.Contains(firstCommand(t, stop[0]), "aura-hook-stop") {
+		t.Errorf("Stop command missing aura-hook-stop marker")
+	}
+
+	notif := eventEntries(t, settings, "Notification")
+	if len(notif) != 1 {
+		t.Fatalf("want 1 Notification block, got %d", len(notif))
+	}
+	if !strings.Contains(firstCommand(t, notif[0]), "aura-hook-notification") {
+		t.Errorf("Notification command missing aura-hook-notification marker")
 	}
 }
 
-func TestPatchStopHooks_PreservesUserHooks(t *testing.T) {
+func TestPatchHooks_PreservesUserHooks(t *testing.T) {
 	settings := map[string]any{
 		"hooks": map[string]any{
 			"Stop": []any{
@@ -43,7 +50,7 @@ func TestPatchStopHooks_PreservesUserHooks(t *testing.T) {
 		"model": "claude-opus-4-7",
 	}
 
-	patchStopHooks(settings)
+	patchHooks(settings)
 
 	if settings["model"] != "claude-opus-4-7" {
 		t.Errorf("model dropped")
@@ -52,7 +59,7 @@ func TestPatchStopHooks_PreservesUserHooks(t *testing.T) {
 		t.Errorf("UserPromptSubmit dropped")
 	}
 
-	stop := stopEntries(t, settings)
+	stop := eventEntries(t, settings, "Stop")
 	if len(stop) != 2 {
 		t.Fatalf("want 2 Stop blocks (user + aura), got %d", len(stop))
 	}
@@ -64,27 +71,31 @@ func TestPatchStopHooks_PreservesUserHooks(t *testing.T) {
 	}
 }
 
-func TestPatchStopHooks_Idempotent(t *testing.T) {
+func TestPatchHooks_Idempotent(t *testing.T) {
 	settings := map[string]any{}
-	patchStopHooks(settings)
-	patchStopHooks(settings)
-	patchStopHooks(settings)
+	patchHooks(settings)
+	patchHooks(settings)
+	patchHooks(settings)
 
-	stop := stopEntries(t, settings)
-	count := 0
-	for _, block := range stop {
-		for _, entry := range innerHooks(t, block) {
-			if strings.Contains(commandOf(t, entry), auraHookMarker) {
-				count++
+	for _, ev := range []string{"Stop", "Notification"} {
+		count := 0
+		for _, block := range eventEntries(t, settings, ev) {
+			for _, entry := range innerHooks(t, block) {
+				if strings.Contains(commandOf(t, entry), auraHookMarker) {
+					count++
+				}
 			}
 		}
-	}
-	if count != 1 {
-		t.Errorf("expected exactly one aura-hook entry after repeated runs, got %d", count)
+		if count != 1 {
+			t.Errorf("%s: want 1 aura-hook entry after repeated runs, got %d", ev, count)
+		}
 	}
 }
 
-func TestPatchStopHooks_ReplacesStaleAuraEntry(t *testing.T) {
+func TestPatchHooks_ReplacesLegacyAuraEntry(t *testing.T) {
+	// Legacy installs (pre-Notification support) used the bare `# aura-hook`
+	// marker on the Stop array. The new patcher must recognise these and
+	// replace them, not leave them next to the new entry.
 	settings := map[string]any{
 		"hooks": map[string]any{
 			"Stop": []any{
@@ -100,14 +111,12 @@ func TestPatchStopHooks_ReplacesStaleAuraEntry(t *testing.T) {
 		},
 	}
 
-	patchStopHooks(settings)
+	patchHooks(settings)
 
-	stop := stopEntries(t, settings)
-	for _, block := range stop {
+	for _, block := range eventEntries(t, settings, "Stop") {
 		for _, entry := range innerHooks(t, block) {
-			cmd := commandOf(t, entry)
-			if strings.Contains(cmd, "old-curl-command") {
-				t.Errorf("stale aura-hook entry not replaced: %q", cmd)
+			if strings.Contains(commandOf(t, entry), "old-curl-command") {
+				t.Errorf("legacy aura-hook entry not replaced: %q", commandOf(t, entry))
 			}
 		}
 	}
@@ -136,23 +145,25 @@ func TestRunSetupHooks_WritesFile(t *testing.T) {
 	if got["model"] != "claude-opus-4-7" {
 		t.Errorf("existing keys not preserved")
 	}
-	stop := stopEntries(t, got)
-	if len(stop) != 1 {
-		t.Fatalf("want 1 stop block, got %d", len(stop))
+	if len(eventEntries(t, got, "Stop")) != 1 {
+		t.Errorf("want 1 Stop block")
+	}
+	if len(eventEntries(t, got, "Notification")) != 1 {
+		t.Errorf("want 1 Notification block")
 	}
 }
 
-func stopEntries(t *testing.T, settings map[string]any) []any {
+func eventEntries(t *testing.T, settings map[string]any, event string) []any {
 	t.Helper()
 	hooks, ok := settings["hooks"].(map[string]any)
 	if !ok {
 		t.Fatal("settings.hooks missing")
 	}
-	stop, ok := hooks["Stop"].([]any)
+	entries, ok := hooks[event].([]any)
 	if !ok {
-		t.Fatal("settings.hooks.Stop missing")
+		t.Fatalf("settings.hooks.%s missing", event)
 	}
-	return stop
+	return entries
 }
 
 func innerHooks(t *testing.T, block any) []any {

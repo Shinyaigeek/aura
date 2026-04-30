@@ -23,17 +23,24 @@ import (
 //   - Wrapping the chain in `(...) >/dev/null 2>&1 || true` swallows every
 //     failure mode — network timeout, server down, missing curl — so a CC
 //     session never blocks on a broken notification path.
-//   - `# aura-hook` is the idempotency marker setup-hooks looks for on
-//     re-runs so it can replace the entry in place instead of appending a
-//     duplicate.
-const auraStopCommand = `([ -n "$AURA_URL" ] && [ -n "$AURA_SESSION_ID" ] && curl -sS -m 5 -X POST -H "Authorization: Bearer $AURA_TOKEN" -H "Content-Type: application/json" -H "X-Aura-Session-Id: $AURA_SESSION_ID" --data-binary @- "$AURA_URL/hooks/stop") >/dev/null 2>&1 || true # aura-hook`
+//   - `# aura-hook-stop` / `# aura-hook-notification` are the idempotency
+//     markers setup-hooks looks for on re-runs so it can replace the
+//     entry in place instead of appending a duplicate. Both contain the
+//     `aura-hook` substring so a legacy entry tagged `# aura-hook` (the
+//     pre-Notification-support marker) is also picked up and replaced.
+const auraStopCommand = `([ -n "$AURA_URL" ] && [ -n "$AURA_SESSION_ID" ] && curl -sS -m 5 -X POST -H "Authorization: Bearer $AURA_TOKEN" -H "Content-Type: application/json" -H "X-Aura-Session-Id: $AURA_SESSION_ID" --data-binary @- "$AURA_URL/hooks/stop") >/dev/null 2>&1 || true # aura-hook-stop`
 
-const auraHookMarker = "# aura-hook"
+const auraNotificationCommand = `([ -n "$AURA_URL" ] && [ -n "$AURA_SESSION_ID" ] && curl -sS -m 5 -X POST -H "Authorization: Bearer $AURA_TOKEN" -H "Content-Type: application/json" -H "X-Aura-Session-Id: $AURA_SESSION_ID" --data-binary @- "$AURA_URL/hooks/notification") >/dev/null 2>&1 || true # aura-hook-notification`
 
-// runSetupHooks patches ~/.claude/settings.json so Claude Code fires
-// auraStopCommand on every Stop event. Idempotent: re-running replaces the
-// existing aura-hook entry rather than appending a duplicate. All other
-// settings keys are preserved verbatim.
+// auraHookMarker matches every aura-installed hook entry, regardless of
+// event type. Used by patchEventHooks to strip stale entries before
+// installing a fresh one.
+const auraHookMarker = "aura-hook"
+
+// runSetupHooks patches ~/.claude/settings.json so Claude Code fires the
+// aura hook commands on Stop and Notification events. Idempotent:
+// re-running replaces existing aura-hook entries rather than appending
+// duplicates. All other settings keys are preserved verbatim.
 func runSetupHooks(args []string) error {
 	fs := flag.NewFlagSet("setup-hooks", flag.ContinueOnError)
 	path := fs.String("file", defaultSettingsPath(), "path to Claude Code settings.json")
@@ -50,7 +57,7 @@ func runSetupHooks(args []string) error {
 		return err
 	}
 
-	patchStopHooks(settings)
+	patchHooks(settings)
 
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
@@ -65,7 +72,7 @@ func runSetupHooks(args []string) error {
 	if err := writeSettings(*path, out); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "installed aura Stop hook in %s\n", *path)
+	fmt.Fprintf(os.Stderr, "installed aura Stop + Notification hooks in %s\n", *path)
 	return nil
 }
 
@@ -87,20 +94,27 @@ func loadSettings(path string) (map[string]any, error) {
 	return settings, nil
 }
 
-// patchStopHooks mutates settings so its `.hooks.Stop` array ends with
-// exactly one aura-hook entry, leaving any user-defined Stop hooks alone.
-func patchStopHooks(settings map[string]any) {
+// patchHooks mutates settings so its `.hooks.Stop` and `.hooks.Notification`
+// arrays each end with exactly one aura-hook entry, leaving any
+// user-defined hooks alone.
+func patchHooks(settings map[string]any) {
 	hooks, ok := settings["hooks"].(map[string]any)
 	if !ok {
 		hooks = map[string]any{}
 	}
-	stopBlocks, _ := hooks["Stop"].([]any)
+	hooks["Stop"] = patchEventHooks(hooks["Stop"], auraStopCommand)
+	hooks["Notification"] = patchEventHooks(hooks["Notification"], auraNotificationCommand)
+	settings["hooks"] = hooks
+}
 
-	// Strip any pre-existing aura-hook entries. We match on the marker
-	// substring rather than the whole command so upgrades (which may change
-	// curl flags or guards) replace old installs cleanly.
-	cleaned := make([]any, 0, len(stopBlocks)+1)
-	for _, rawBlock := range stopBlocks {
+// patchEventHooks strips any pre-existing aura-hook entries from a single
+// event's hook array and appends a fresh one carrying newCommand. We match
+// on the marker substring rather than the whole command so upgrades (which
+// may change curl flags or guards) replace old installs cleanly.
+func patchEventHooks(existing any, newCommand string) []any {
+	blocks, _ := existing.([]any)
+	cleaned := make([]any, 0, len(blocks)+1)
+	for _, rawBlock := range blocks {
 		block, ok := rawBlock.(map[string]any)
 		if !ok {
 			cleaned = append(cleaned, rawBlock)
@@ -133,13 +147,11 @@ func patchStopHooks(settings map[string]any) {
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": auraStopCommand,
+				"command": newCommand,
 			},
 		},
 	})
-
-	hooks["Stop"] = cleaned
-	settings["hooks"] = hooks
+	return cleaned
 }
 
 func writeSettings(path string, data []byte) error {
