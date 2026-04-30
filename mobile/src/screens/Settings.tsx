@@ -1,6 +1,4 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import Constants from "expo-constants";
-import * as Notifications from "expo-notifications";
 import { useEffect, useState } from "react";
 import {
   Alert,
@@ -25,7 +23,6 @@ export default function SettingsScreen({ navigation }: Props) {
   const [cfg, setCfg] = useState<ServerConfig>({ url: "", token: "" });
   const [loaded, setLoaded] = useState(false);
   const [focused, setFocused] = useState<FieldKey | null>(null);
-  const [diagRunning, setDiagRunning] = useState(false);
 
   useEffect(() => {
     loadConfig().then((c) => {
@@ -33,17 +30,6 @@ export default function SettingsScreen({ navigation }: Props) {
       setLoaded(true);
     });
   }, []);
-
-  const onRunDiag = async () => {
-    if (diagRunning) return;
-    setDiagRunning(true);
-    try {
-      const report = await runNotificationDiag(cfg);
-      Alert.alert("Notification diagnostics", report);
-    } finally {
-      setDiagRunning(false);
-    }
-  };
 
   const onSave = async () => {
     const trimmed: ServerConfig = {
@@ -124,116 +110,9 @@ export default function SettingsScreen({ navigation }: Props) {
         >
           <Text style={styles.saveButtonText}>Save & connect</Text>
         </Pressable>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Notifications</Text>
-          <Text style={styles.cardSubtitle}>
-            Walks the permission → token → register chain and reports each step. Use this when push
-            notifications aren't arriving.
-          </Text>
-          <Pressable
-            onPress={onRunDiag}
-            disabled={diagRunning}
-            style={({ pressed }) => [
-              styles.secondaryButton,
-              pressed && styles.secondaryButtonPressed,
-              diagRunning && styles.secondaryButtonDisabled,
-            ]}
-          >
-            <Text style={styles.secondaryButtonText}>
-              {diagRunning ? "Running…" : "Run notification diagnostics"}
-            </Text>
-          </Pressable>
-        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
-}
-
-// runNotificationDiag walks the same chain usePushRegistration does, but
-// surfaces every step so a user can see which one is failing on their device.
-// Side-effects are intentional: we register the real token if one is obtainable
-// so a successful diag also fixes the underlying problem.
-async function runNotificationDiag(cfg: ServerConfig): Promise<string> {
-  const lines: string[] = [];
-  const fmt = (e: unknown) =>
-    e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
-
-  let granted = false;
-  try {
-    const cur = await Notifications.getPermissionsAsync();
-    granted = cur.granted || cur.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
-    lines.push(
-      `permissions(now): granted=${cur.granted} status=${cur.status} canAskAgain=${cur.canAskAgain ?? "?"}`,
-    );
-  } catch (e) {
-    lines.push(`permissions(now): ERR ${fmt(e)}`);
-  }
-
-  if (Platform.OS === "android") {
-    try {
-      await Notifications.setNotificationChannelAsync("default", {
-        name: "default",
-        importance: Notifications.AndroidImportance.DEFAULT,
-        vibrationPattern: [0, 200, 100, 200],
-        lightColor: "#7aa2f7",
-      });
-      lines.push("channel: ok");
-    } catch (e) {
-      lines.push(`channel: ERR ${fmt(e)}`);
-    }
-  }
-
-  if (!granted) {
-    try {
-      const req = await Notifications.requestPermissionsAsync({
-        ios: { allowAlert: true, allowBadge: false, allowSound: true },
-      });
-      granted = req.granted || req.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
-      lines.push(
-        `permissions(req): granted=${req.granted} status=${req.status} canAskAgain=${req.canAskAgain ?? "?"}`,
-      );
-    } catch (e) {
-      lines.push(`permissions(req): ERR ${fmt(e)}`);
-    }
-  } else {
-    lines.push("permissions(req): skipped (already granted)");
-  }
-
-  let token: string | null = null;
-  try {
-    const projectId =
-      Constants.expoConfig?.extra?.eas?.projectId ??
-      (Constants as unknown as { easConfig?: { projectId?: string } }).easConfig?.projectId;
-    const tok = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
-    token = tok.data;
-    lines.push(`token: ${tok.data.slice(0, 28)}…`);
-  } catch (e) {
-    lines.push(`token: ERR ${fmt(e)}`);
-  }
-
-  if (!token) {
-    lines.push("register: skipped (no token)");
-  } else if (!cfg.url || !cfg.token) {
-    lines.push("register: skipped (no server cfg)");
-  } else {
-    try {
-      const base = cfg.url.replace(/\/+$/, "").replace(/^ws(s?):\/\//, "http$1://");
-      const res = await fetch(`${base}/devices/register`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${cfg.token}`,
-        },
-        body: JSON.stringify({ expoPushToken: token, platform: Platform.OS }),
-      });
-      lines.push(`register: HTTP ${res.status}`);
-    } catch (e) {
-      lines.push(`register: ERR ${fmt(e)}`);
-    }
-  }
-
-  return lines.join("\n");
 }
 
 const styles = StyleSheet.create({
@@ -310,23 +189,5 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 16,
     letterSpacing: 0.3,
-  },
-
-  secondaryButton: {
-    backgroundColor: "#1c2030",
-    borderWidth: 1,
-    borderColor: "#3b4262",
-    paddingVertical: 13,
-    borderRadius: 10,
-    alignItems: "center",
-    marginTop: 4,
-  },
-  secondaryButtonPressed: { backgroundColor: "#252a3d" },
-  secondaryButtonDisabled: { opacity: 0.6 },
-  secondaryButtonText: {
-    color: "#c0caf5",
-    fontWeight: "600",
-    fontSize: 14,
-    letterSpacing: 0.2,
   },
 });

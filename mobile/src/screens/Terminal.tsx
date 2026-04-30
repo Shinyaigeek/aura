@@ -30,7 +30,7 @@ import {
   type Tab,
   type TabsState,
 } from "@/lib/storage";
-import { subscribePushTap, usePushRegistration } from "@/lib/push";
+import { subscribePushTap } from "@/lib/push";
 import { useSessionMetaMap, type SessionMeta } from "@/lib/session-meta";
 import { terminalHtml } from "@/lib/terminal-html";
 import { uploadFile, type UploadProgress } from "@/lib/upload";
@@ -90,8 +90,6 @@ export default function TerminalScreen({ navigation }: Props) {
   const handleBufferDump = useCallback((text: string) => {
     setCopyText(text);
   }, []);
-
-  usePushRegistration(cfg);
 
   const tabIds = useMemo(() => tabsState?.tabs.map((t) => t.id) ?? [], [tabsState]);
   const metaMap = useSessionMetaMap(cfg, tabIds);

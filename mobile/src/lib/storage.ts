@@ -43,6 +43,19 @@ export async function loadConfig(): Promise<ServerConfig> {
 
 export async function saveConfig(cfg: ServerConfig): Promise<void> {
   await AsyncStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
+  for (const l of configListeners) l(cfg);
+}
+
+// Pub/sub on saveConfig so app-level effects (events client, notification
+// permission) can react to Settings updates without polling. Subscribers
+// fire after the AsyncStorage write resolves.
+const configListeners = new Set<(cfg: ServerConfig) => void>();
+
+export function subscribeConfig(listener: (cfg: ServerConfig) => void): () => void {
+  configListeners.add(listener);
+  return () => {
+    configListeners.delete(listener);
+  };
 }
 
 export async function loadTabs(): Promise<TabsState> {

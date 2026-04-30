@@ -1,28 +1,26 @@
-// Push-notification registration + tap handling.
+// Local-notification permission + tap routing.
 //
-// Flow:
-//   - On first launch (after the user has configured cfg), we request OS
-//     notification permission and ask Expo for this install's push token.
-//   - We POST that token to aura-server's /devices/register so the server's
-//     Stop-hook fanout can reach us.
-//   - A tap on a delivered notification surfaces { sessionId } from its data
-//     payload via subscribePushTap so Terminal can focus that tab.
+// Aura no longer goes through Expo Push / FCM; the server fans events
+// over its own /events WebSocket and we surface them as local
+// notifications via expo-notifications (see lib/events-client.ts).
+// What's left here is the OS-level plumbing that's still required:
 //
-// We intentionally avoid silent retries: if registration fails (server down,
-// permission denied), the effect re-runs whenever cfg changes, which is the
-// usual way a user fixes it.
+//   - The default Android channel (heads-up delivery is per-channel).
+//   - The runtime POST_NOTIFICATIONS request on Android 13+.
+//   - The notification handler that keeps banners visible while aura
+//     is foregrounded.
+//   - A pubsub for notification taps so Terminal can jump to the
+//     matching session tab.
 
-import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { useEffect } from "react";
 import { Platform } from "react-native";
 
 import type { ServerConfig } from "./storage";
 
-// Configure how notifications surface while the app is foregrounded. Without
-// this, Expo suppresses the OS banner for foreground pushes which is not what
-// we want — the whole point is to alert the user to CC finishing while they
-// are in another app.
+// Without this, Expo suppresses the OS banner for foreground notifications,
+// which defeats the point — the user expects an alert when CC finishes
+// regardless of whether aura happens to be on screen.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -30,13 +28,6 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
-
-// Convert a WebSocket config URL (ws://host:port) into the matching http
-// base. Mirrors kill-session.ts — kept local to avoid lifting that helper
-// out of its file for one caller.
-function httpBase(url: string): string {
-  return url.replace(/\/+$/, "").replace(/^ws(s?):\/\//, "http$1://");
-}
 
 export type PushTapEvent = { sessionId: string };
 
@@ -75,8 +66,8 @@ function extractSessionId(n: Notifications.Notification | null | undefined): str
 }
 
 // subscribePushTap registers a listener for notification taps. The listener
-// fires once per tap, carrying the sessionId the server attached to the push
-// payload. Returns an unsubscribe.
+// fires once per tap, carrying the sessionId attached to the notification's
+// data payload. Returns an unsubscribe.
 export function subscribePushTap(listener: TapListener): () => void {
   startTapSubscriptionOnce();
   tapListeners.add(listener);
@@ -96,10 +87,11 @@ export function __stopTapSubscription() {
   tapListeners.clear();
 }
 
-// usePushRegistration requests permission + registers the Expo token with the
-// aura-server whenever the config changes. On Android it also ensures a
-// default notification channel exists (required for heads-up delivery).
-export function usePushRegistration(cfg: ServerConfig | null) {
+// useNotificationPermission ensures the Android channel exists and the
+// runtime POST_NOTIFICATIONS permission has been requested whenever cfg
+// is set. We tie it to cfg presence so an unconfigured user isn't
+// bothered with a permission dialog on first launch.
+export function useNotificationPermission(cfg: ServerConfig | null) {
   const url = cfg?.url ?? "";
   const token = cfg?.token ?? "";
 
@@ -116,59 +108,21 @@ export function usePushRegistration(cfg: ServerConfig | null) {
           lightColor: "#7aa2f7",
         });
       }
-
-      const settings = await Notifications.getPermissionsAsync();
-      let granted =
-        settings.granted ||
-        settings.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
-      if (!granted) {
-        const req = await Notifications.requestPermissionsAsync({
-          ios: {
-            allowAlert: true,
-            allowBadge: false,
-            allowSound: true,
-          },
-        });
-        granted =
-          req.granted || req.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
-      }
-      if (!granted) return;
-
-      // EAS / Expo Go ships a projectId at runtime via Constants; when running
-      // a local dev client without it, getExpoPushTokenAsync falls back to the
-      // legacy flow. Both produce a usable ExponentPushToken[...] string.
-      const projectId =
-        Constants.expoConfig?.extra?.eas?.projectId ??
-        (Constants as unknown as { easConfig?: { projectId?: string } }).easConfig?.projectId;
-      let expoPushToken: string;
-      try {
-        const res = await Notifications.getExpoPushTokenAsync(
-          projectId ? { projectId } : undefined,
-        );
-        expoPushToken = res.data;
-      } catch (err) {
-        // Most common cause: no APNs/FCM credentials in dev. Not worth
-        // surfacing; retrying on next cfg change is fine.
-        console.warn("getExpoPushTokenAsync failed", err);
-        return;
-      }
       if (cancelled) return;
 
-      try {
-        const res = await fetch(`${httpBase(url)}/devices/register`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ expoPushToken, platform: Platform.OS }),
-        });
-        if (!res.ok) {
-          console.warn("device register failed", res.status);
-        }
-      } catch (err) {
-        console.warn("device register request failed", err);
-      }
+      const settings = await Notifications.getPermissionsAsync();
+      const granted =
+        settings.granted ||
+        settings.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+      if (granted) return;
+
+      await Notifications.requestPermissionsAsync({
+        ios: {
+          allowAlert: true,
+          allowBadge: false,
+          allowSound: true,
+        },
+      });
     })();
 
     return () => {
