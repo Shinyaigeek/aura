@@ -16,6 +16,7 @@ import (
 
 	"github.com/Shinyaigeek/aura/server/internal/auth"
 	"github.com/Shinyaigeek/aura/server/internal/ccmeta"
+	"github.com/Shinyaigeek/aura/server/internal/difit"
 	"github.com/Shinyaigeek/aura/server/internal/events"
 	"github.com/Shinyaigeek/aura/server/internal/notify"
 	"github.com/Shinyaigeek/aura/server/internal/session"
@@ -44,9 +45,10 @@ func main() {
 	}
 
 	var (
-		addr  = flag.String("addr", ":8787", "listen address")
-		token = flag.String("token", os.Getenv("AURA_TOKEN"), "shared auth token (env AURA_TOKEN)")
-		shell = flag.String("shell", defaultShell(), "shell to run inside tmux when a new session is created")
+		addr     = flag.String("addr", ":8787", "listen address")
+		token    = flag.String("token", os.Getenv("AURA_TOKEN"), "shared auth token (env AURA_TOKEN)")
+		shell    = flag.String("shell", defaultShell(), "shell to run inside tmux when a new session is created")
+		difitCmd = flag.String("difit-cmd", defaultDifitCmd(), "command used to spawn difit (env AURA_DIFIT_CMD)")
 	)
 	flag.Parse()
 
@@ -78,6 +80,17 @@ func main() {
 	titles := ccmeta.NewCache()
 	cwdLookup := func(id string) (string, error) { return tmux.PaneCurrentPath(id) }
 
+	difitMgr := difit.NewManager(*difitCmd)
+
+	// DELETE /sessions/{id} tears down the tmux session and any difit
+	// process that was spawned alongside it. The two are kept in lockstep
+	// so a closed tab on the phone cleans up both halves.
+	killHandler := ws.NewKillHandler(mgr)
+	wrappedKill := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		difitMgr.Stop(r.PathValue("id"))
+		killHandler.ServeHTTP(w, r)
+	})
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -85,9 +98,11 @@ func main() {
 	})
 	mux.Handle("GET /ws", authMw(ws.NewHandler(mgr)))
 	mux.Handle("GET /events", authMw(events.NewHandler(hub)))
-	mux.Handle("DELETE /sessions/{id}", authMw(ws.NewKillHandler(mgr)))
+	mux.Handle("DELETE /sessions/{id}", authMw(wrappedKill))
 	mux.Handle("GET /sessions/{id}/meta", authMw(notify.NewMetaHandler(cwdLookup, titles)))
 	mux.Handle("POST /sessions/{id}/upload", authMw(upload.NewHandler(cwdLookup)))
+	mux.Handle("POST /sessions/{id}/difit", authMw(difit.NewStartHandler(difitMgr, cwdLookup)))
+	mux.Handle("DELETE /sessions/{id}/difit", authMw(difit.NewStopHandler(difitMgr)))
 	mux.Handle("POST /hooks/stop", authMw(notify.NewStopHookHandler(hub, titles)))
 	mux.Handle("POST /hooks/notification", authMw(notify.NewNotificationHookHandler(hub)))
 
@@ -115,6 +130,7 @@ func main() {
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
 	mgr.CloseAll()
+	difitMgr.StopAll()
 }
 
 func defaultShell() string {
@@ -122,6 +138,13 @@ func defaultShell() string {
 		return s
 	}
 	return "/bin/bash"
+}
+
+func defaultDifitCmd() string {
+	if s := os.Getenv("AURA_DIFIT_CMD"); s != "" {
+		return s
+	}
+	return "difit"
 }
 
 // hookCallbackURL turns the server's listen address into the http base URL

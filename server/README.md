@@ -26,7 +26,12 @@ export AURA_TOKEN=$(openssl rand -hex 32)
 - `GET /ws?session=<id>` — WebSocket upgrade. Auth via `Authorization:
   Bearer <token>`, `?token=<token>`, or the `bearer.<token>`
   subprotocol.
-- `DELETE /sessions/<id>` — terminates a tmux session.
+- `DELETE /sessions/<id>` — terminates a tmux session (and any difit
+  process spawned for it).
+- `POST /sessions/<id>/difit` — starts (or returns) a per-session
+  [difit](https://github.com/yoshiko-pg/difit) instance bound to a free
+  port in the session's pane cwd. Response: `{"port":<n>}`.
+- `DELETE /sessions/<id>/difit` — stops it.
 - `POST /devices/register` — registers a mobile Expo push token.
 - `POST /hooks/stop` — Claude Code Stop-hook callback; fans a push
   notification out to every registered device.
@@ -67,6 +72,9 @@ systemd unit, generates a token at `/etc/aura/aura.env` on first
 run (idempotent on reruns), disables any pre-existing `ghostty-web`
 service, and enables + starts `aura-server`. Works on Debian/Ubuntu
 (apt), Fedora/RHEL (dnf), and Arch (pacman) for the tmux dependency.
+Also installs `bun` and `difit` (used by the in-app diff viewer)
+under `AURA_USER`, with a wrapper at `/usr/local/bin/difit` so
+aura-server can spawn it from systemd's PATH.
 
 Overrides: `AURA_VERSION=server-vX.Y.Z`, `AURA_ADDR=:9000`,
 `AURA_USER=other`, `SKIP_GHOSTTY=1`. See
