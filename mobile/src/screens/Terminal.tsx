@@ -20,6 +20,7 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import type { RootStackParamList } from "../../App";
 import { base64ToBytes, bytesToBase64 } from "@/lib/base64";
+import { difitUrl, startDifit } from "@/lib/difit-client";
 import { killSession } from "@/lib/kill-session";
 import {
   loadConfig,
@@ -155,6 +156,18 @@ export default function TerminalScreen({ navigation }: Props) {
     websRef.current[id]?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
   }, []);
 
+  const onDifitPress = useCallback(() => {
+    const id = activeTabIdRef.current;
+    if (!id || !cfg) return;
+    startDifit(cfg, id)
+      .then((port) => {
+        navigation.navigate("Difit", { url: difitUrl(cfg, port), sessionId: id });
+      })
+      .catch((err: unknown) => {
+        Alert.alert("Could not start difit", err instanceof Error ? err.message : String(err));
+      });
+  }, [cfg, navigation]);
+
   const onUploadPress = useCallback(() => {
     const handlePick = (p: Promise<PickedFile | null>) => {
       p.then(setPendingUpload).catch((err: unknown) => {
@@ -202,6 +215,13 @@ export default function TerminalScreen({ navigation }: Props) {
             <Text style={styles.headerIcon}>▤</Text>
           </Pressable>
           <Pressable
+            onPress={onDifitPress}
+            hitSlop={10}
+            style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
+          >
+            <Text style={styles.headerIcon}>Δ</Text>
+          </Pressable>
+          <Pressable
             onPress={() => navigation.navigate("Settings")}
             hitSlop={10}
             style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
@@ -211,9 +231,10 @@ export default function TerminalScreen({ navigation }: Props) {
         </View>
       ),
     });
-  }, [navigation, activeStatus, onCopyPress, onUploadPress, onEscPress]);
+  }, [navigation, activeStatus, onCopyPress, onUploadPress, onEscPress, onDifitPress]);
   // onCopyPress / onUploadPress / onEscPress are ref-stable now; they're listed
-  // so the lint rule stays happy but their identities never change.
+  // so the lint rule stays happy but their identities never change. onDifitPress
+  // re-binds when cfg changes (rarely) — that's acceptable.
 
   const handleStatus = useCallback((id: string, status: WsStatus) => {
     setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
