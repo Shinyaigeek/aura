@@ -115,22 +115,47 @@ export const terminalHtml = `<!doctype html>
     // the user can pick a region with native handles and hit Copy. We can't
     // rely on in-place selection because xterm's rows set user-select: none and
     // the custom touch handler below claims vertical drags for scrollback.
+    function postBufferText(s) {
+      var bytes = new TextEncoder().encode(s);
+      var binary = '';
+      for (var i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      post('B' + btoa(binary));
+    }
     window.__auraDumpBuffer = function () {
       try {
-        var buf = term.buffer.active;
-        var lines = [];
-        for (var y = 0; y < buf.length; y++) {
-          var line = buf.getLine(y);
-          lines.push(line ? line.translateToString(true) : '');
+        // Primary: xterm's own selectAll/getSelection. This is what xterm uses
+        // internally for clipboard copy — it picks the active buffer (normal vs
+        // alternate), reconstructs wrapped lines, and skips trailing blank
+        // rows. The previous manual buf.getLine(y).translateToString(true)
+        // walk returned empty under tmux/Claude Code's alternate buffer in some
+        // cases (presented as "(buffer is empty)" in the modal even with
+        // visible content). Manual walk kept as fallback.
+        var text = '';
+        try {
+          term.selectAll();
+          text = term.getSelection() || '';
+          term.clearSelection();
+        } catch (e) {}
+        if (!text) {
+          var buf = term.buffer.active;
+          var lines = [];
+          for (var y = 0; y < buf.length; y++) {
+            var line = buf.getLine(y);
+            lines.push(line ? line.translateToString(true) : '');
+          }
+          while (lines.length && lines[lines.length - 1] === '') lines.pop();
+          text = lines.join('\\n');
         }
-        while (lines.length && lines[lines.length - 1] === '') lines.pop();
-        var text = lines.join('\\n');
-        var bytes = new TextEncoder().encode(text);
-        var binary = '';
-        for (var i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-        post('B' + btoa(binary));
+        if (!text) {
+          var b = term.buffer.active;
+          text = '(buffer is empty)\\n[diag] type=' + b.type + ' length=' + b.length +
+                 ' baseY=' + b.baseY + ' viewportY=' + b.viewportY +
+                 ' cursor=' + b.cursorX + ',' + b.cursorY +
+                 ' rows=' + term.rows + ' cols=' + term.cols;
+        }
+        postBufferText(text);
       } catch (e) {
-        post('B');
+        postBufferText('(dump failed) ' + (e && e.message ? e.message : String(e)));
       }
     };
     // Focus the helper textarea directly as well as calling term.focus(). On
