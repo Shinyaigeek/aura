@@ -34,8 +34,12 @@ export const terminalHtml = `<!doctype html>
 <style>
   html, body, #term { margin: 0; padding: 0; height: 100%; width: 100%; background: #0b0b0f; }
   body { overflow: hidden; -webkit-tap-highlight-color: transparent; }
-  #term { padding: 6px 4px 0 6px; box-sizing: border-box; touch-action: pan-y; }
-  .xterm, .xterm-viewport, .xterm-screen { touch-action: pan-y; }
+  /* touch-action: none — must not be pan-y. On Android WebView, pan-y
+     hands the vertical drag to the compositor, which downgrades touchmove
+     to passive (preventDefault becomes a no-op) and the custom scrollback
+     handler below never sees the gesture. */
+  #term { padding: 6px 4px 0 6px; box-sizing: border-box; touch-action: none; }
+  .xterm, .xterm-viewport, .xterm-screen { touch-action: none; }
   .xterm .xterm-viewport { background-color: transparent !important; }
   .xterm-selection div { background-color: rgba(122, 162, 247, 0.25) !important; }
 </style>
