@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestListDirectories(t *testing.T) {
+func TestListEntriesDirsOnly(t *testing.T) {
 	tmp := t.TempDir()
 
 	for _, name := range []string{"src", "tests", ".hidden", "zzz"} {
@@ -20,9 +20,9 @@ func TestListDirectories(t *testing.T) {
 		}
 	}
 
-	got, err := listDirectories(tmp)
+	got, err := listEntries(tmp, true)
 	if err != nil {
-		t.Fatalf("listDirectories: %v", err)
+		t.Fatalf("listEntries: %v", err)
 	}
 
 	wantNames := []string{"src", "tests", "zzz"}
@@ -39,19 +39,51 @@ func TestListDirectories(t *testing.T) {
 	}
 }
 
-func TestListDirectoriesRejectsRelative(t *testing.T) {
-	if _, err := listDirectories("relative/path"); err == nil {
+func TestListEntriesIncludesFiles(t *testing.T) {
+	tmp := t.TempDir()
+
+	if err := os.Mkdir(filepath.Join(tmp, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "README.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".hidden"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := listEntries(tmp, false)
+	if err != nil {
+		t.Fatalf("listEntries: %v", err)
+	}
+	// dirs first, then files; hidden excluded.
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2: %+v", len(got), got)
+	}
+	if got[0].Name != "src" || !got[0].IsDir {
+		t.Errorf("entries[0] = %+v, want src/dir", got[0])
+	}
+	if got[1].Name != "README.md" || got[1].IsDir {
+		t.Errorf("entries[1] = %+v, want README.md/file", got[1])
+	}
+	if got[1].Size != 5 {
+		t.Errorf("entries[1].Size = %d, want 5", got[1].Size)
+	}
+}
+
+func TestListEntriesRejectsRelative(t *testing.T) {
+	if _, err := listEntries("relative/path", true); err == nil {
 		t.Fatal("expected error for relative path")
 	}
 }
 
-func TestListDirectoriesErrorsOnMissing(t *testing.T) {
-	if _, err := listDirectories(filepath.Join(os.TempDir(), "nonexistent-aura-test-dir-xyz123")); err == nil {
+func TestListEntriesErrorsOnMissing(t *testing.T) {
+	if _, err := listEntries(filepath.Join(os.TempDir(), "nonexistent-aura-test-dir-xyz123"), true); err == nil {
 		t.Fatal("expected error for missing path")
 	}
 }
 
-func TestListDirectoriesResolvesDirSymlink(t *testing.T) {
+func TestListEntriesResolvesDirSymlink(t *testing.T) {
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "actual")
 	link := filepath.Join(tmp, "alias")
@@ -62,7 +94,7 @@ func TestListDirectoriesResolvesDirSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := listDirectories(tmp)
+	got, err := listEntries(tmp, true)
 	if err != nil {
 		t.Fatal(err)
 	}

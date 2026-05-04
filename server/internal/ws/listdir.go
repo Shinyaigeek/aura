@@ -11,12 +11,16 @@ import (
 type dirEntry struct {
 	Name  string `json:"name"`
 	IsDir bool   `json:"isDir"`
+	Size  int64  `json:"size,omitempty"`
 }
 
-// listDirectories returns the subdirectories of path, excluding hidden
-// (dot-prefixed) entries and plain files. Symlinks are resolved; a symlink
-// that points to a directory is included. path must be absolute.
-func listDirectories(path string) ([]dirEntry, error) {
+// listEntries returns the entries of path, excluding hidden (dot-prefixed)
+// names. Symlinks are resolved; a symlink to a directory counts as a
+// directory. When dirsOnly is true, regular files are filtered out (this
+// preserves the original "directory picker" behavior used by the upload
+// destination flow). path must be absolute. Results are sorted with
+// directories first, then alphabetically.
+func listEntries(path string, dirsOnly bool) ([]dirEntry, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("path must be absolute: %q", path)
 	}
@@ -34,17 +38,32 @@ func listDirectories(path string) ([]dirEntry, error) {
 			continue
 		}
 		isDir := e.IsDir()
-		if !isDir && e.Type()&os.ModeSymlink != 0 {
+		var size int64
+		if e.Type()&os.ModeSymlink != 0 {
 			info, err := os.Stat(filepath.Join(clean, name))
-			if err == nil && info.IsDir() {
-				isDir = true
+			if err != nil {
+				continue
+			}
+			isDir = info.IsDir()
+			if !isDir {
+				size = info.Size()
+			}
+		} else if !isDir {
+			info, err := e.Info()
+			if err == nil {
+				size = info.Size()
 			}
 		}
-		if !isDir {
+		if dirsOnly && !isDir {
 			continue
 		}
-		out = append(out, dirEntry{Name: name, IsDir: true})
+		out = append(out, dirEntry{Name: name, IsDir: isDir, Size: size})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsDir != out[j].IsDir {
+			return out[i].IsDir
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
 }

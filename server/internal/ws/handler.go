@@ -14,12 +14,14 @@
 //	{"type":"resize","rows":40,"cols":120}
 //	{"type":"ping"}
 //	{"type":"cwd","id":"r1"}
-//	{"type":"listdir","id":"r2","path":"/home/user"}
+//	{"type":"listdir","id":"r2","path":"/home/user","dirsOnly":false}
+//	{"type":"readfile","id":"r3","path":"/home/user/file.go"}
 //
 // Server → client responses:
 //
 //	{"type":"cwd_response","id":"r1","path":"/home/user/project"}
 //	{"type":"listdir_response","id":"r2","path":"/home/user","entries":[{"name":"src","isDir":true}]}
+//	{"type":"readfile_response","id":"r3","path":"/home/user/file.go","content":"...","size":123,"truncated":false,"binary":false}
 //	{"type":"error","id":"r2","message":"..."}
 package ws
 
@@ -144,11 +146,12 @@ func NewHandler(mgr Manager) http.Handler {
 }
 
 type controlMsg struct {
-	Type string `json:"type"`
-	ID   string `json:"id,omitempty"`
-	Rows uint16 `json:"rows,omitempty"`
-	Cols uint16 `json:"cols,omitempty"`
-	Path string `json:"path,omitempty"`
+	Type     string `json:"type"`
+	ID       string `json:"id,omitempty"`
+	Rows     uint16 `json:"rows,omitempty"`
+	Cols     uint16 `json:"cols,omitempty"`
+	Path     string `json:"path,omitempty"`
+	DirsOnly bool   `json:"dirsOnly,omitempty"`
 }
 
 type cwdResponse struct {
@@ -162,6 +165,16 @@ type listdirResponse struct {
 	ID      string     `json:"id"`
 	Path    string     `json:"path"`
 	Entries []dirEntry `json:"entries"`
+}
+
+type readfileResponse struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+	Size      int64  `json:"size"`
+	Truncated bool   `json:"truncated"`
+	Binary    bool   `json:"binary"`
 }
 
 type errorResponse struct {
@@ -190,7 +203,7 @@ func handleControl(ctx context.Context, conn *websocket.Conn, sess *session.Sess
 		}
 		writeJSON(ctx, conn, cwdResponse{Type: "cwd_response", ID: msg.ID, Path: path})
 	case "listdir":
-		entries, err := listDirectories(msg.Path)
+		entries, err := listEntries(msg.Path, msg.DirsOnly)
 		if err != nil {
 			writeJSON(ctx, conn, errorResponse{Type: "error", ID: msg.ID, Message: err.Error()})
 			return
@@ -200,6 +213,21 @@ func handleControl(ctx context.Context, conn *websocket.Conn, sess *session.Sess
 			ID:      msg.ID,
 			Path:    filepath.Clean(msg.Path),
 			Entries: entries,
+		})
+	case "readfile":
+		res, err := readFileForViewer(msg.Path)
+		if err != nil {
+			writeJSON(ctx, conn, errorResponse{Type: "error", ID: msg.ID, Message: err.Error()})
+			return
+		}
+		writeJSON(ctx, conn, readfileResponse{
+			Type:      "readfile_response",
+			ID:        msg.ID,
+			Path:      res.Path,
+			Content:   res.Content,
+			Size:      res.Size,
+			Truncated: res.Truncated,
+			Binary:    res.Binary,
 		})
 	}
 }
