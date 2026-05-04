@@ -45,7 +45,7 @@ func readFileForViewer(path string) (*readFileResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Read at most maxReadFileBytes+1 so we can tell whether the file is
 	// strictly larger than the cap without reading the rest.
