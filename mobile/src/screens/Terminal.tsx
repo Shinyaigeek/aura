@@ -8,12 +8,14 @@ import {
   Alert,
   AppState,
   type AppStateStatus,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
@@ -64,6 +66,7 @@ export default function TerminalScreen({ navigation }: Props) {
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [copyText, setCopyText] = useState<string | null>(null);
   const [viewingFile, setViewingFile] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -257,6 +260,24 @@ export default function TerminalScreen({ navigation }: Props) {
     setTabsState((prev) => (prev && prev.activeTabId !== id ? { ...prev, activeTabId: id } : prev));
   }, []);
 
+  const renameTab = useCallback((id: string, customLabel: string) => {
+    setTabsState((prev) => {
+      if (!prev) return prev;
+      const trimmed = customLabel.trim();
+      const tabs = prev.tabs.map((t) => {
+        if (t.id !== id) return t;
+        if (trimmed.length === 0) {
+          // Empty input clears the manual override and falls back to
+          // server meta title / default label.
+          const { customLabel: _drop, ...rest } = t;
+          return rest;
+        }
+        return { ...t, customLabel: trimmed };
+      });
+      return { ...prev, tabs };
+    });
+  }, []);
+
   const closeTab = useCallback(
     (id: string) => {
       const runClose = () => {
@@ -328,6 +349,7 @@ export default function TerminalScreen({ navigation }: Props) {
         onSelect={selectTab}
         onClose={closeTab}
         onAdd={addTab}
+        onRename={(id) => setRenamingId(id)}
       />
       <View style={styles.terminalWrap}>
         {tabsState.tabs.map((tab) => (
@@ -422,6 +444,25 @@ export default function TerminalScreen({ navigation }: Props) {
       >
         <CopyModal text={copyText ?? ""} onClose={() => setCopyText(null)} />
       </Modal>
+
+      <Modal
+        visible={renamingId !== null}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setRenamingId(null)}
+      >
+        {renamingId !== null && (
+          <RenameTabModal
+            tab={tabsState.tabs.find((t) => t.id === renamingId) ?? null}
+            metaTitle={metaMap[renamingId]?.title?.trim() ?? ""}
+            onCancel={() => setRenamingId(null)}
+            onSubmit={(value) => {
+              renameTab(renamingId, value);
+              setRenamingId(null);
+            }}
+          />
+        )}
+      </Modal>
     </View>
   );
 }
@@ -444,6 +485,78 @@ function CopyModal({ text, onClose }: { text: string; onClose: () => void }) {
         </Text>
       </ScrollView>
     </View>
+  );
+}
+
+function RenameTabModal({
+  tab,
+  metaTitle,
+  onCancel,
+  onSubmit,
+}: {
+  tab: Tab | null;
+  metaTitle: string;
+  onCancel: () => void;
+  onSubmit: (value: string) => void;
+}) {
+  const initial = tab?.customLabel ?? "";
+  const [value, setValue] = useState(initial);
+  // Reset the field whenever a different tab opens — otherwise long-pressing
+  // tab A then B would show A's draft text.
+  useEffect(() => {
+    setValue(tab?.customLabel ?? "");
+  }, [tab?.id, tab?.customLabel]);
+
+  if (!tab) return null;
+  const placeholder = metaTitle.length > 0 ? metaTitle : tab.label;
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      style={styles.renameBackdrop}
+    >
+      <Pressable style={styles.renameBackdropPress} onPress={onCancel} />
+      <View style={styles.renameCard}>
+        <Text style={styles.renameTitle}>Rename tab</Text>
+        <Text style={styles.renameHint}>
+          Leave empty to clear the manual name and fall back to the auto title.
+        </Text>
+        <TextInput
+          style={styles.renameInput}
+          value={value}
+          onChangeText={setValue}
+          placeholder={placeholder}
+          placeholderTextColor="#4a4e63"
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoFocus
+          returnKeyType="done"
+          onSubmitEditing={() => onSubmit(value)}
+          maxLength={64}
+        />
+        <View style={styles.renameButtons}>
+          <Pressable
+            onPress={onCancel}
+            style={({ pressed }) => [
+              styles.renameButton,
+              styles.renameButtonGhost,
+              pressed && { opacity: 0.6 },
+            ]}
+          >
+            <Text style={styles.renameButtonGhostText}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => onSubmit(value)}
+            style={({ pressed }) => [
+              styles.renameButton,
+              styles.renameButtonPrimary,
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Text style={styles.renameButtonPrimaryText}>Save</Text>
+          </Pressable>
+        </View>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -820,9 +933,19 @@ type TabBarProps = {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onAdd: () => void;
+  onRename: (id: string) => void;
 };
 
-function TabBar({ tabs, activeTabId, statuses, metaMap, onSelect, onClose, onAdd }: TabBarProps) {
+function TabBar({
+  tabs,
+  activeTabId,
+  statuses,
+  metaMap,
+  onSelect,
+  onClose,
+  onAdd,
+  onRename,
+}: TabBarProps) {
   return (
     <View style={styles.tabBar}>
       <ScrollView
@@ -835,11 +958,15 @@ function TabBar({ tabs, activeTabId, statuses, metaMap, onSelect, onClose, onAdd
           const isActive = tab.id === activeTabId;
           const status = statuses[tab.id] ?? "closed";
           const title = metaMap[tab.id]?.title?.trim();
-          const label = title && title.length > 0 ? title : tab.label;
+          const custom = tab.customLabel?.trim();
+          const label =
+            custom && custom.length > 0 ? custom : title && title.length > 0 ? title : tab.label;
           return (
             <Pressable
               key={tab.id}
               onPress={() => onSelect(tab.id)}
+              onLongPress={() => onRename(tab.id)}
+              delayLongPress={350}
               style={({ pressed }) => [
                 styles.tabPill,
                 isActive && styles.tabPillActive,
@@ -1149,6 +1276,60 @@ const styles = StyleSheet.create({
       default: "monospace",
     }),
   },
+
+  renameBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(11, 11, 15, 0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  renameBackdropPress: { ...StyleSheet.absoluteFillObject },
+  renameCard: {
+    width: "100%",
+    maxWidth: 380,
+    backgroundColor: "#14151c",
+    borderWidth: 1,
+    borderColor: "#2a2d3d",
+    borderRadius: 14,
+    padding: 18,
+  },
+  renameTitle: {
+    color: "#e4e6ef",
+    fontSize: 16,
+    fontWeight: "600",
+    marginBottom: 6,
+  },
+  renameHint: {
+    color: "#6b7089",
+    fontSize: 12,
+    marginBottom: 12,
+  },
+  renameInput: {
+    backgroundColor: "#0b0b0f",
+    borderWidth: 1,
+    borderColor: "#2a2d3d",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: "#e4e6ef",
+    fontSize: 15,
+  },
+  renameButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 14,
+  },
+  renameButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  renameButtonGhost: { backgroundColor: "transparent" },
+  renameButtonGhostText: { color: "#8b90a8", fontWeight: "500", fontSize: 14 },
+  renameButtonPrimary: { backgroundColor: "#7aa2f7" },
+  renameButtonPrimaryText: { color: "#0b0b0f", fontWeight: "700", fontSize: 14 },
 
   banner: {
     position: "absolute",

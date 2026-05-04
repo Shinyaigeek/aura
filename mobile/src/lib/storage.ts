@@ -8,6 +8,10 @@ export type ServerConfig = {
 export type Tab = {
   id: string;
   label: string;
+  // Set when the user manually renames a tab. Wins over both the auto-derived
+  // session title (from server meta) and the default `label` so a human-chosen
+  // name isn't clobbered by Claude transcript titles or session-N defaults.
+  customLabel?: string;
 };
 
 export type TabsState = {
@@ -105,9 +109,14 @@ export async function loadTabs(): Promise<TabsState> {
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as Partial<TabsState>;
-      const tabs = (parsed.tabs ?? []).filter(
-        (t): t is Tab => !!t && typeof t.id === "string" && typeof t.label === "string",
-      );
+      const tabs = (parsed.tabs ?? [])
+        .filter((t): t is Tab => !!t && typeof t.id === "string" && typeof t.label === "string")
+        .map((t) => {
+          const custom = (t as Tab).customLabel;
+          return typeof custom === "string" && custom.length > 0
+            ? { id: t.id, label: t.label, customLabel: custom }
+            : { id: t.id, label: t.label };
+        });
       if (tabs.length === 0) return defaultTabs;
       const activeTabId =
         parsed.activeTabId && tabs.some((t) => t.id === parsed.activeTabId)
