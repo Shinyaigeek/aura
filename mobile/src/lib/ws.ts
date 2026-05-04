@@ -22,9 +22,12 @@ export type WsClientCallbacks = {
 
 export type ControlMessage = { type: "resize"; rows: number; cols: number } | { type: "ping" };
 
-export type DirEntry = { name: string; isDir: boolean };
+export type DirEntry = { name: string; isDir: boolean; size?: number };
 
-export type RequestMessage = { type: "cwd" } | { type: "listdir"; path: string };
+export type RequestMessage =
+  | { type: "cwd" }
+  | { type: "listdir"; path: string; dirsOnly?: boolean }
+  | { type: "readfile"; path: string };
 
 export type CwdResponse = { type: "cwd_response"; id: string; path: string };
 export type ListdirResponse = {
@@ -32,6 +35,15 @@ export type ListdirResponse = {
   id: string;
   path: string;
   entries: DirEntry[];
+};
+export type ReadfileResponse = {
+  type: "readfile_response";
+  id: string;
+  path: string;
+  content: string;
+  size: number;
+  truncated: boolean;
+  binary: boolean;
 };
 
 type Pending = {
@@ -116,16 +128,22 @@ export class WsClient {
 
   sendInput(data: ArrayBuffer | Uint8Array | string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    // The wire protocol distinguishes PTY input (binary frames) from JSON
+    // control messages (text frames). RN's WebSocket.send maps strings to
+    // text frames, so we must encode any string input to UTF-8 bytes and
+    // send as binary — otherwise the server tries to JSON-parse it, fails,
+    // and silently drops the input. Caused the "Move directory" CD to do
+    // nothing and the ESC button to misfire prior to 0.0.29.
+    let bytes: Uint8Array;
     if (typeof data === "string") {
+      bytes = new TextEncoder().encode(data);
+    } else if (data instanceof ArrayBuffer) {
       this.ws.send(data);
       return;
+    } else {
+      bytes = data;
     }
-    // React Native's WebSocket accepts ArrayBuffer.
-    const ab =
-      data instanceof ArrayBuffer
-        ? data
-        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-    this.ws.send(ab);
+    this.ws.send(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   }
 
   sendControl(msg: ControlMessage): void {

@@ -21,6 +21,11 @@ type Props = {
   title?: string;
   /** Label on the confirm button. Defaults to "Move here". */
   primaryLabel?: string;
+  /** When set, regular files are listed alongside directories and tapping a
+   * file invokes this callback (the modal stays open; caller decides). When
+   * undefined, the server is asked for directories only — preserving the
+   * upload-destination picker's "no files" behavior. */
+  onPickFile?: (path: string) => void;
 };
 
 type Row = DirEntry | { name: ".."; isDir: true; synthetic: true };
@@ -31,7 +36,9 @@ export default function DirectoryBrowser({
   onPick,
   title = "Move to…",
   primaryLabel = "Move here",
+  onPickFile,
 }: Props) {
+  const includeFiles = onPickFile !== undefined;
   const [path, setPath] = useState<string | null>(null);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,6 +71,7 @@ export default function DirectoryBrowser({
         const dir = await client.request<ListdirResponse>({
           type: "listdir",
           path: resolvedPath,
+          dirsOnly: !includeFiles,
         });
         if (requestSeqRef.current !== seq) return;
         setPath(dir.path);
@@ -75,20 +83,24 @@ export default function DirectoryBrowser({
         if (requestSeqRef.current === seq) setLoading(false);
       }
     },
-    [client],
+    [client, includeFiles],
   );
 
   useEffect(() => {
     void load(null);
   }, [load]);
 
-  const onNavigate = useCallback(
-    (name: string) => {
+  const onRowPress = useCallback(
+    (item: Row) => {
       if (!path) return;
-      const next = name === ".." ? parentPath(path) : joinPath(path, name);
-      void load(next);
+      if (item.isDir) {
+        const next = item.name === ".." ? parentPath(path) : joinPath(path, item.name);
+        void load(next);
+        return;
+      }
+      onPickFile?.(joinPath(path, item.name));
     },
-    [path, load],
+    [path, load, onPickFile],
   );
 
   const onMoveHere = useCallback(() => {
@@ -139,7 +151,9 @@ export default function DirectoryBrowser({
         </View>
       ) : rows.length === 0 ? (
         <View style={styles.center}>
-          <Text style={styles.emptyText}>No subdirectories here.</Text>
+          <Text style={styles.emptyText}>
+            {includeFiles ? "Nothing here." : "No subdirectories here."}
+          </Text>
         </View>
       ) : (
         <FlatList
@@ -147,13 +161,18 @@ export default function DirectoryBrowser({
           keyExtractor={(item) => item.name}
           renderItem={({ item }) => (
             <Pressable
-              onPress={() => onNavigate(item.name)}
+              onPress={() => onRowPress(item)}
               style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
             >
-              <Text style={styles.rowIcon}>{item.name === ".." ? "↩" : "▸"}</Text>
+              <Text style={[styles.rowIcon, !item.isDir && styles.rowIconFile]}>
+                {item.name === ".." ? "↩" : item.isDir ? "▸" : "≡"}
+              </Text>
               <Text style={styles.rowName} numberOfLines={1}>
                 {item.name}
               </Text>
+              {!item.isDir && item.size !== undefined && (
+                <Text style={styles.rowMeta}>{formatSize(item.size)}</Text>
+              )}
             </Pressable>
           )}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -196,6 +215,12 @@ function parentPath(p: string): string {
 function joinPath(a: string, b: string): string {
   if (a.endsWith("/")) return a + b;
   return a + "/" + b;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 const styles = StyleSheet.create({
@@ -264,10 +289,23 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginRight: 12,
   },
+  rowIconFile: {
+    color: "#9aa0bd",
+  },
   rowName: {
     color: "#e4e6ef",
     fontSize: 15,
     flex: 1,
+  },
+  rowMeta: {
+    color: "#6b7089",
+    fontSize: 12,
+    marginLeft: 10,
+    fontFamily: Platform.select({
+      ios: "Menlo",
+      android: "monospace",
+      default: "monospace",
+    }),
   },
   separator: {
     height: 1,

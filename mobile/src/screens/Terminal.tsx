@@ -37,6 +37,7 @@ import { terminalHtml } from "@/lib/terminal-html";
 import { uploadFile, type UploadProgress } from "@/lib/upload";
 import { WsClient, type WsStatus } from "@/lib/ws";
 import DirectoryBrowser from "./DirectoryBrowser";
+import FileViewer from "./FileViewer";
 
 type PickedFile = {
   uri: string;
@@ -62,6 +63,7 @@ export default function TerminalScreen({ navigation }: Props) {
   const [pendingUpload, setPendingUpload] = useState<PickedFile | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [copyText, setCopyText] = useState<string | null>(null);
+  const [viewingFile, setViewingFile] = useState<string | null>(null);
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -357,7 +359,26 @@ export default function TerminalScreen({ navigation }: Props) {
             if (client) client.sendInput(`cd ${shellQuote(path)}\r`);
             setBrowserOpen(false);
           }}
+          // Leave the browser open so dismissing the viewer returns the
+          // user to where they were exploring instead of back to the
+          // terminal.
+          onPickFile={(path) => setViewingFile(path)}
         />
+      </Modal>
+
+      <Modal
+        visible={viewingFile !== null}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setViewingFile(null)}
+      >
+        {viewingFile !== null && (
+          <FileViewer
+            client={clientsRef.current[tabsState.activeTabId] ?? null}
+            path={viewingFile}
+            onClose={() => setViewingFile(null)}
+          />
+        )}
       </Modal>
 
       <Modal
