@@ -24,6 +24,7 @@ import type { RootStackParamList } from "../../App";
 import { base64ToBytes, bytesToBase64 } from "@/lib/base64";
 import { difitUrl, startDifit } from "@/lib/difit-client";
 import { killSession } from "@/lib/kill-session";
+import type { DetectedUrl } from "@/lib/preview-url";
 import {
   loadConfig,
   loadTabs,
@@ -67,6 +68,13 @@ export default function TerminalScreen({ navigation }: Props) {
   const [copyText, setCopyText] = useState<string | null>(null);
   const [viewingFile, setViewingFile] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  // History of detected dev-server URLs per tab. Most recent at the end.
+  // Used by the 🌐 header button to re-open the latest URL after the banner
+  // has been dismissed.
+  const [previewUrls, setPreviewUrls] = useState<Record<string, DetectedUrl[]>>({});
+  // The URL currently shown in the bottom banner for each tab. null means
+  // the user dismissed it (× or "open"); a fresh detection sets it again.
+  const [previewBanner, setPreviewBanner] = useState<Record<string, DetectedUrl | null>>({});
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -95,6 +103,17 @@ export default function TerminalScreen({ navigation }: Props) {
 
   const handleBufferDump = useCallback((text: string) => {
     setCopyText(text);
+  }, []);
+
+  const handlePreviewUrl = useCallback((id: string, detected: DetectedUrl) => {
+    setPreviewUrls((prev) => {
+      const existing = prev[id] ?? [];
+      // Detector dedupes within a session, but cfg changes / reconnects
+      // rebuild the client so guard here too — keeps the list short.
+      if (existing.some((d) => d.url === detected.url)) return prev;
+      return { ...prev, [id]: [...existing, detected] };
+    });
+    setPreviewBanner((prev) => ({ ...prev, [id]: detected }));
   }, []);
 
   const tabIds = useMemo(() => tabsState?.tabs.map((t) => t.id) ?? [], [tabsState]);
@@ -173,6 +192,37 @@ export default function TerminalScreen({ navigation }: Props) {
       });
   }, [cfg, navigation]);
 
+  // Open the most recent detected URL for the active tab. Reads from state
+  // via a ref so the header callback doesn't churn on every detection.
+  const previewUrlsRef = useRef(previewUrls);
+  previewUrlsRef.current = previewUrls;
+  const openPreview = useCallback(
+    (url: string) => {
+      const id = activeTabIdRef.current;
+      if (!id) return;
+      navigation.navigate("Preview", { url, sessionId: id });
+    },
+    [navigation],
+  );
+  const onPreviewPress = useCallback(() => {
+    const id = activeTabIdRef.current;
+    if (!id) return;
+    const list = previewUrlsRef.current[id] ?? [];
+    const latest = list[list.length - 1];
+    if (!latest) return;
+    setPreviewBanner((prev) => (prev[id] === null ? prev : { ...prev, [id]: null }));
+    openPreview(latest.url);
+  }, [openPreview]);
+  const dismissBanner = useCallback(() => {
+    const id = activeTabIdRef.current;
+    if (!id) return;
+    setPreviewBanner((prev) => (prev[id] === null ? prev : { ...prev, [id]: null }));
+  }, []);
+
+  const activeTabId = tabsState?.activeTabId;
+  const hasPreviewUrls = activeTabId ? (previewUrls[activeTabId]?.length ?? 0) > 0 : false;
+  const activeBanner = activeTabId ? (previewBanner[activeTabId] ?? null) : null;
+
   const onUploadPress = useCallback(() => {
     const handlePick = (p: Promise<PickedFile | null>) => {
       p.then(setPendingUpload).catch((err: unknown) => {
@@ -226,6 +276,15 @@ export default function TerminalScreen({ navigation }: Props) {
           >
             <Text style={styles.headerIcon}>Δ</Text>
           </Pressable>
+          {hasPreviewUrls && (
+            <Pressable
+              onPress={onPreviewPress}
+              hitSlop={10}
+              style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
+            >
+              <Text style={styles.headerIcon}>◐</Text>
+            </Pressable>
+          )}
           <Pressable
             onPress={() => navigation.navigate("Settings")}
             hitSlop={10}
@@ -236,10 +295,20 @@ export default function TerminalScreen({ navigation }: Props) {
         </View>
       ),
     });
-  }, [navigation, activeStatus, onCopyPress, onUploadPress, onEscPress, onDifitPress]);
+  }, [
+    navigation,
+    activeStatus,
+    onCopyPress,
+    onUploadPress,
+    onEscPress,
+    onDifitPress,
+    onPreviewPress,
+    hasPreviewUrls,
+  ]);
   // onCopyPress / onUploadPress / onEscPress are ref-stable now; they're listed
   // so the lint rule stays happy but their identities never change. onDifitPress
-  // re-binds when cfg changes (rarely) — that's acceptable.
+  // re-binds when cfg changes (rarely) — that's acceptable. onPreviewPress is
+  // ref-stable too; hasPreviewUrls flips the icon's presence.
 
   const handleStatus = useCallback((id: string, status: WsStatus) => {
     setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
@@ -296,6 +365,16 @@ export default function TerminalScreen({ navigation }: Props) {
         setStatuses((prev) => {
           if (!(id in prev)) return prev;
           const { [id]: _dropped, ...rest } = prev;
+          return rest;
+        });
+        setPreviewUrls((prev) => {
+          if (!(id in prev)) return prev;
+          const { [id]: _drop, ...rest } = prev;
+          return rest;
+        });
+        setPreviewBanner((prev) => {
+          if (!(id in prev)) return prev;
+          const { [id]: _drop, ...rest } = prev;
           return rest;
         });
         if (cfg?.url && cfg?.token) {
@@ -362,10 +441,21 @@ export default function TerminalScreen({ navigation }: Props) {
             registerClient={registerClient}
             registerWeb={registerWeb}
             onBuffer={handleBufferDump}
+            onPreviewUrl={handlePreviewUrl}
           />
         ))}
       </View>
       {activeStatus !== "open" && <OfflineBanner status={activeStatus} />}
+      {activeBanner && (
+        <PreviewBanner
+          url={activeBanner.url}
+          onOpen={() => openPreview(activeBanner.url)}
+          onDismiss={dismissBanner}
+          // Push above the OfflineBanner when both are visible so they don't
+          // overlap. OfflineBanner sits at bottom: 24.
+          offsetBottom={activeStatus !== "open" ? 80 : 24}
+        />
+      )}
 
       <Modal
         visible={browserOpen}
@@ -670,6 +760,7 @@ type TabViewProps = {
   registerClient: (id: string, client: WsClient | null) => void;
   registerWeb: (id: string, web: WebView | null) => void;
   onBuffer: (text: string) => void;
+  onPreviewUrl: (id: string, detected: DetectedUrl) => void;
 };
 
 // One tab = one WebSocket + one WebView (with its own xterm.js instance).
@@ -692,6 +783,7 @@ function TabViewImpl({
   registerClient,
   registerWeb,
   onBuffer,
+  onPreviewUrl,
 }: TabViewProps) {
   const webRef = useRef<WebView | null>(null);
   const clientRef = useRef<WsClient | null>(null);
@@ -755,6 +847,7 @@ function TabViewImpl({
           setTimeout(flushPending, 0);
         }
       },
+      onPreviewUrl: (d) => onPreviewUrl(tab.id, d),
     });
     clientRef.current = client;
     registerClient(tab.id, client);
@@ -775,7 +868,7 @@ function TabViewImpl({
       // every focus-driven cfg refresh, causing onBinary to drop every
       // frame and presenting as "connected but black + no input".
     };
-  }, [cfg, tab.id, onStatus, flushPending, registerClient]);
+  }, [cfg, tab.id, onStatus, flushPending, registerClient, onPreviewUrl]);
 
   // React to active-state changes. Becoming active clears the idle timer and
   // kicks a reconnect if needed; becoming inactive starts the countdown.
@@ -1008,6 +1101,43 @@ function HeaderTitle({ status }: { status: WsStatus }) {
       <View style={[styles.statusDot, statusDotStyle(status)]} />
       <Text style={styles.headerTitleText}>aura</Text>
       <Text style={styles.headerStatusText}>{statusLabel(status)}</Text>
+    </View>
+  );
+}
+
+function PreviewBanner({
+  url,
+  onOpen,
+  onDismiss,
+  offsetBottom,
+}: {
+  url: string;
+  onOpen: () => void;
+  onDismiss: () => void;
+  offsetBottom: number;
+}) {
+  return (
+    <View style={[styles.previewBanner, { bottom: offsetBottom }]}>
+      <Pressable
+        style={({ pressed }) => [styles.previewBannerMain, pressed && { opacity: 0.7 }]}
+        onPress={onOpen}
+        hitSlop={6}
+      >
+        <Text style={styles.previewBannerIcon}>◐</Text>
+        <View style={styles.previewBannerTextWrap}>
+          <Text style={styles.previewBannerLabel}>Open in preview</Text>
+          <Text style={styles.previewBannerUrl} numberOfLines={1}>
+            {url}
+          </Text>
+        </View>
+      </Pressable>
+      <Pressable
+        onPress={onDismiss}
+        hitSlop={10}
+        style={({ pressed }) => [styles.previewBannerClose, pressed && { opacity: 0.5 }]}
+      >
+        <Text style={styles.previewBannerCloseText}>×</Text>
+      </Pressable>
     </View>
   );
 }
@@ -1349,5 +1479,55 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginLeft: 8,
     fontWeight: "500",
+  },
+
+  previewBanner: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(20, 21, 28, 0.96)",
+    borderWidth: 1,
+    borderColor: "#3b4262",
+    paddingLeft: 12,
+    paddingRight: 4,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  previewBannerMain: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  previewBannerIcon: {
+    color: "#7aa2f7",
+    fontSize: 18,
+    marginRight: 10,
+  },
+  previewBannerTextWrap: { flex: 1 },
+  previewBannerLabel: {
+    color: "#c0caf5",
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
+  previewBannerUrl: {
+    color: "#8b90a8",
+    fontSize: 12,
+    marginTop: 1,
+  },
+  previewBannerClose: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  previewBannerCloseText: {
+    color: "#6b7089",
+    fontSize: 18,
+    lineHeight: 20,
+    fontWeight: "600",
   },
 });
