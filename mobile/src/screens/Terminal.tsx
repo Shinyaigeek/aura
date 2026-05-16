@@ -812,18 +812,40 @@ function TabViewImpl({
     flushScheduledRef.current = false;
     const frames = pendingFramesRef.current;
     if (frames.length === 0) return;
-    pendingFramesRef.current = [];
 
+    // Cap the merged payload that goes through injectJavaScript in a single
+    // tick. Above this size the bridge serialisation + WebView evaluate
+    // blocks the JS thread long enough that Android posts an ANR ("aura is
+    // not responding") modal — seen under bursty terminal output (build
+    // logs, `cat huge_file`, tmux reattach with lots of scrollback).
+    // Remaining frames are kept for the next rAF tick.
+    const MAX_FLUSH_BYTES = 256 * 1024;
     let total = 0;
-    for (const f of frames) total += f.byteLength;
+    let cutoff = frames.length;
+    for (let i = 0; i < frames.length; i++) {
+      if (total > 0 && total + frames[i].byteLength > MAX_FLUSH_BYTES) {
+        cutoff = i;
+        break;
+      }
+      total += frames[i].byteLength;
+    }
+    const toFlush = cutoff === frames.length ? frames : frames.slice(0, cutoff);
+    pendingFramesRef.current = cutoff === frames.length ? [] : frames.slice(cutoff);
+
     const merged = new Uint8Array(total);
     let offset = 0;
-    for (const f of frames) {
+    for (const f of toFlush) {
       merged.set(f, offset);
       offset += f.byteLength;
     }
     const b64 = bytesToBase64(merged);
     webRef.current?.injectJavaScript(`window.__auraWrite(${JSON.stringify(b64)});true;`);
+
+    // More buffered? Yield to the main thread via rAF before the next slice.
+    if (pendingFramesRef.current.length > 0 && !flushScheduledRef.current) {
+      flushScheduledRef.current = true;
+      requestAnimationFrame(flushPending);
+    }
   }, []);
 
   // Own the WsClient for this tab's lifetime. Creation runs when cfg or tab.id
@@ -844,7 +866,11 @@ function TabViewImpl({
         if (!webReadyRef.current) return;
         if (!flushScheduledRef.current) {
           flushScheduledRef.current = true;
-          setTimeout(flushPending, 0);
+          // rAF (not setTimeout 0) so bursty output paces at the display
+          // refresh rate and the main thread keeps getting frames in to
+          // handle input — otherwise back-to-back flushes starve the UI
+          // thread and Android shows an ANR ("not responding") modal.
+          requestAnimationFrame(flushPending);
         }
       },
       onPreviewUrl: (d) => onPreviewUrl(tab.id, d),
@@ -948,7 +974,7 @@ function TabViewImpl({
         // the xterm CDN bundles, so the initial tmux redraw lands here.
         if (pendingFramesRef.current.length > 0 && !flushScheduledRef.current) {
           flushScheduledRef.current = true;
-          setTimeout(flushPending, 0);
+          requestAnimationFrame(flushPending);
         }
         return;
       }
