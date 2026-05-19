@@ -22,7 +22,6 @@ export type TabsState = {
 const CONFIG_KEY = "aura.server-config.v1";
 const TABS_KEY = "aura.tabs.v1";
 const PREFS_KEY = "aura.prefs.v1";
-const SESSION_META_KEY = "aura.session-meta.v1";
 
 const defaultConfig: ServerConfig = { url: "", token: "" };
 
@@ -151,42 +150,6 @@ export async function loadTabs(): Promise<TabsState> {
 
 export async function saveTabs(state: TabsState): Promise<void> {
   await AsyncStorage.setItem(TABS_KEY, JSON.stringify(state));
-}
-
-// Cache of the last server-derived session meta per session id, persisted so
-// the tab panel can show meaningful titles on cold start before the first
-// poll comes back — or while tmux is disconnected entirely. Shape mirrors
-// SessionMeta in session-meta.ts; kept structural to avoid a circular import.
-export type StoredSessionMeta = {
-  title?: string;
-  cwd?: string;
-  transcriptAt?: string;
-};
-
-export async function loadSessionMetaMap(): Promise<Record<string, StoredSessionMeta>> {
-  const raw = await AsyncStorage.getItem(SESSION_META_KEY);
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") return {};
-    const out: Record<string, StoredSessionMeta> = {};
-    for (const [id, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!v || typeof v !== "object") continue;
-      const m = v as Partial<StoredSessionMeta>;
-      const entry: StoredSessionMeta = {};
-      if (typeof m.title === "string") entry.title = m.title;
-      if (typeof m.cwd === "string") entry.cwd = m.cwd;
-      if (typeof m.transcriptAt === "string") entry.transcriptAt = m.transcriptAt;
-      out[id] = entry;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-export async function saveSessionMetaMap(map: Record<string, StoredSessionMeta>): Promise<void> {
-  await AsyncStorage.setItem(SESSION_META_KEY, JSON.stringify(map));
 }
 
 // nextTabId returns the smallest "session-N" not already in use, starting at 1.

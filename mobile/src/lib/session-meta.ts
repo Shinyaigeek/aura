@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from "react";
 
-import { loadSessionMetaMap, saveSessionMetaMap, type ServerConfig } from "./storage";
+import type { ServerConfig } from "./storage";
 
 export type SessionMeta = {
   title?: string;
@@ -84,25 +84,11 @@ export function useSessionMetaMap(
   // Stable key so reorderings/renames don't re-trigger the effect.
   const idsKey = sessionIds.slice().sort().join("|");
 
-  // Hydrate from AsyncStorage on mount so the tab panel shows the last known
-  // titles immediately on cold start, even before the first poll lands —
-  // critical when tmux is disconnected (app was force-closed, server down).
   useEffect(() => {
-    let cancelled = false;
-    void loadSessionMetaMap().then((stored) => {
-      if (cancelled) return;
-      // Merge so a poll that raced the disk read still wins for those ids.
-      setMap((prev) => ({ ...stored, ...prev }));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    // Without cfg or tabs we can't poll, but keep the hydrated cache around
-    // so titles stay visible until the user reconfigures / reopens a tab.
-    if (!url || !token || sessionIds.length === 0) return;
+    if (!url || !token || sessionIds.length === 0) {
+      setMap({});
+      return;
+    }
     let cancelled = false;
     const ids = sessionIds.slice();
     const run = async () => {
@@ -117,9 +103,6 @@ export function useSessionMetaMap(
           // than blank, since blank would blink the tab label back to id.
           next[id] = m ?? prev[id] ?? {};
         }
-        // Persist only the current tab set; entries for closed tabs are
-        // dropped so the cache doesn't accumulate forever.
-        void saveSessionMetaMap(next);
         return next;
       });
     };
