@@ -16,7 +16,6 @@ import {
   subscribePrefs,
 } from "@/lib/storage";
 import DifitScreen from "@/screens/Difit";
-import PreviewScreen from "@/screens/Preview";
 import SettingsScreen from "@/screens/Settings";
 import TerminalScreen from "@/screens/Terminal";
 
@@ -24,7 +23,6 @@ export type RootStackParamList = {
   Terminal: undefined;
   Settings: undefined;
   Difit: { url: string; sessionId: string };
-  Preview: { url: string; sessionId: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -74,11 +72,6 @@ export default function App() {
           <Stack.Screen
             name="Difit"
             component={DifitScreen}
-            options={{ headerBackTitle: "Back" }}
-          />
-          <Stack.Screen
-            name="Preview"
-            component={PreviewScreen}
             options={{ headerBackTitle: "Back" }}
           />
         </Stack.Navigator>
