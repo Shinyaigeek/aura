@@ -9,15 +9,16 @@
 
 import type { ServerConfig } from "./storage";
 
-// ESC (0x1b) and BEL (0x07). Building the regexes from these constants keeps
-// oxlint's no-control-regex rule happy while still letting us match ANSI
-// sequences in the actual terminal stream.
-const ESC = String.fromCharCode(0x1b);
-const BEL = String.fromCharCode(0x07);
-
-const LOCAL_HOST_GROUP = "(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::\\]|\\[::1\\])";
+// ANSI ESC (0x1b) and BEL (0x07) are matched via \x1b / \x07 escape
+// sequences. An earlier version interpolated String.fromCharCode(0x1b/0x07)
+// into the pattern via template literals — which put RAW 0x1b / 0x07 bytes
+// into the pattern *string* handed to `new RegExp`. The release-build Hermes
+// RegExp parser mishandled a pattern string carrying raw control bytes badly
+// enough to crash the app on launch (v0.0.31). The \x.. escapes keep the
+// pattern string pure-ASCII so Hermes parses it cleanly; oxlint's
+// no-control-regex stays quiet because there is no raw control character.
 const URL_RE = new RegExp(
-  `https?:\\/\\/${LOCAL_HOST_GROUP}:(\\d{2,5})(\\/[^\\s${ESC}${BEL}"'<>()]*)?`,
+  "https?://(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::\\]|\\[::1\\]):(\\d{2,5})(/[^\\s\\x1b\\x07\"'<>()]*)?",
   "gi",
 );
 
@@ -25,7 +26,7 @@ const URL_RE = new RegExp(
 // ESC `[…m`; without stripping, the URL we surface to the user would carry
 // stray escape bytes.
 const ANSI_RE = new RegExp(
-  `${ESC}(?:\\[[0-9;?]*[ -/]*[@-~]|\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)|[@-Z\\\\\\-_])`,
+  "\\x1b(?:\\[[0-9;?]*[ -/]*[@-~]|\\][^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)|[@-Z\\\\\\-_])",
   "g",
 );
 
