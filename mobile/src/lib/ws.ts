@@ -10,6 +10,7 @@
 //     user's expectation is that the terminal is "just there" when they
 //     open the app.
 
+import { type DetectedUrl, PreviewUrlDetector, previewHost } from "./preview-url";
 import type { ServerConfig } from "./storage";
 
 export type WsStatus = "connecting" | "open" | "closed";
@@ -18,6 +19,8 @@ export type WsClientCallbacks = {
   onStatus: (status: WsStatus) => void;
   onBinary: (data: ArrayBuffer) => void;
   onText?: (text: string) => void;
+  // Fires once per newly-detected dev-server URL (deduped within a session).
+  onPreviewUrl?: (detected: DetectedUrl) => void;
 };
 
 export type ControlMessage = { type: "resize"; rows: number; cols: number } | { type: "ping" };
@@ -70,12 +73,16 @@ export class WsClient {
   // tmux's existing render size so no SIGWINCH redraw fires, and the
   // mobile xterm renders nothing — the "connected, black, no input" state.
   private lastResize: { type: "resize"; rows: number; cols: number } | null = null;
+  private previewDetector = new PreviewUrlDetector();
+  private previewHost: string;
 
   constructor(
     private readonly cfg: ServerConfig,
     private readonly sessionId: string,
     private readonly cb: WsClientCallbacks,
-  ) {}
+  ) {
+    this.previewHost = previewHost(cfg);
+  }
 
   start(): void {
     this.closedByUser = false;
@@ -265,6 +272,13 @@ export class WsClient {
         this.dispatchText(data);
       } else if (data instanceof ArrayBuffer) {
         this.cb.onBinary(data);
+        if (this.cb.onPreviewUrl) {
+          // Detector keeps a small carry buffer + dedupe set; running it on
+          // the same bytes as onBinary is intentional — terminal output is
+          // the only place dev-server URLs ever appear.
+          const found = this.previewDetector.feed(new Uint8Array(data), this.previewHost);
+          for (const d of found) this.cb.onPreviewUrl(d);
+        }
       }
     };
 
