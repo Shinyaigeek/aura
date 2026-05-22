@@ -41,6 +41,18 @@ process kills — none of them touch the running `claude` process.
 - `mobile/` — iOS/Android app. Terminal renderer + WebSocket client with
   automatic reattach on reconnect.
 
+## Security
+
+aura-server is, by design, **remote shell access to the host it runs
+on** — whoever holds `AURA_TOKEN` can run arbitrary commands and read
+arbitrary files as the server's user. Treat the token like an SSH
+private key, and **never expose `aura-server` directly to the public
+internet**: keep it on a trusted LAN or behind a private tunnel
+(Tailscale / WireGuard / SSH). The default `ws://` transport is
+plaintext — put it behind TLS (`wss://`) if traffic leaves a trusted
+link. See [`SECURITY.md`](SECURITY.md) for the full threat model and how
+to report a vulnerability.
+
 ## Trying it today
 
 Fastest path to run on a physical phone:
@@ -89,10 +101,22 @@ accounts are required for the default Android APK release path.
   apps" for your file manager, tap to install. The APK is signed with
   the Expo-generated debug key, which is fine for personal sideload —
   not for Play Store distribution.
-- **iOS**: not built in CI. Apple requires a paid Developer Program
-  account ($99/year) for any install on a physical device
-  (ad-hoc / TestFlight / App Store). Until then, use the Expo Go path
-  documented in [`mobile/README.md`](mobile/README.md).
+- **iOS**: not built in CI, and there is no "download-and-tap" install
+  like the Android APK — iOS will not run an `.ipa` that is not signed
+  with an Apple-issued certificate and provisioning profile. The
+  distribution options, none of them free:
+  - **TestFlight** — the realistic path for sharing with others.
+    Needs a paid Apple Developer Program account ($99/year); a public
+    TestFlight link then reaches up to 10,000 testers, though each
+    build expires 90 days after upload.
+  - **Self-sideload** — publish an `.ipa` as a release asset and let
+    each user install it themselves with AltStore / Sideloadly using
+    their own Apple ID. No cost to the project, but the signature
+    expires every 7 days and the user must re-sign it.
+  - **App Store** — full review; also needs the $99/year account.
+
+  Until an iOS release track is set up, use the Expo Go path documented
+  in [`mobile/README.md`](mobile/README.md).
 
 ## Status
 
