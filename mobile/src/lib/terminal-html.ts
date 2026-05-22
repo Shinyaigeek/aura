@@ -17,6 +17,15 @@
 //   "B<base64>"        full scrollback buffer dump (utf-8), in response to
 //                      __auraDumpBuffer() — used by the copy modal
 //
+// An on-screen key bar (Esc, Tab, ← ↑ ↓ →) sits at the bottom of the
+// document. Mobile soft keyboards have no arrow keys, so Claude Code's
+// interactive prompts (permission dialogs, plan picker) — which navigate
+// with the cursor keys — could not be answered from the app. Each cap
+// synthesizes the escape sequence a hardware key would emit and posts it
+// through the same "i" channel as a real keystroke. The bar is shown only
+// while the soft keyboard is up, and #root is sized to window.visualViewport
+// so the terminal + bar stay above the keyboard instead of behind it.
+//
 // CRITICAL: this string is a TS template literal. Any `\n`, `\t`, `\\`,
 // or `${...}` inside the JS below is interpreted at template-expansion
 // time, so escape sequences that need to reach the WebView as JS source
@@ -32,20 +41,55 @@ export const terminalHtml = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
 <style>
-  html, body, #term { margin: 0; padding: 0; height: 100%; width: 100%; background: #0b0b0f; }
+  html, body { margin: 0; padding: 0; height: 100%; width: 100%; background: #0b0b0f; }
   body { overflow: hidden; -webkit-tap-highlight-color: transparent; }
+  /* #root is pinned to the *visual* viewport — its height is kept in sync
+     with window.visualViewport in JS. On iOS the soft keyboard overlays the
+     WebView without resizing it, so the bottom rows (where Claude Code draws
+     its prompts) would otherwise render behind the keyboard and be
+     impossible to read or answer. Sizing #root to the visible area keeps
+     the terminal and key bar fully above the keyboard. */
+  #root { position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+          display: flex; flex-direction: column; }
   /* touch-action: none — must not be pan-y. On Android WebView, pan-y
      hands the vertical drag to the compositor, which downgrades touchmove
      to passive (preventDefault becomes a no-op) and the custom scrollback
      handler below never sees the gesture. */
-  #term { padding: 6px 4px 0 6px; box-sizing: border-box; touch-action: none; }
+  #term { flex: 1 1 auto; min-height: 0; padding: 6px 4px 0 6px;
+          box-sizing: border-box; touch-action: none; }
   .xterm, .xterm-viewport, .xterm-screen { touch-action: none; }
   .xterm .xterm-viewport { background-color: transparent !important; }
   .xterm-selection div { background-color: rgba(122, 162, 247, 0.25) !important; }
+
+  /* On-screen key bar. Hidden until the soft keyboard is up (xterm's helper
+     textarea gains focus); shown as a flex row of equal-width caps. */
+  #keybar { flex: 0 0 auto; display: none; flex-direction: row;
+            padding: 4px; gap: 4px; background: #14151c;
+            border-top: 1px solid #20222c;
+            -webkit-user-select: none; user-select: none; }
+  #keybar.visible { display: flex; }
+  .keycap { flex: 1 1 0; display: flex; align-items: center;
+            justify-content: center; height: 38px; border-radius: 8px;
+            background: #1c2030; border: 1px solid #2a2d3d;
+            color: #c0caf5; font-size: 18px; line-height: 1;
+            touch-action: manipulation; -webkit-touch-callout: none; }
+  .keycap.pressed { background: #2f3656; border-color: #3b4262; }
+  .keycap-label { font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+                  font-family: ui-monospace, Menlo, monospace; }
 </style>
 </head>
 <body>
-<div id="term"></div>
+<div id="root">
+  <div id="term"></div>
+  <div id="keybar">
+    <div class="keycap" data-key="esc"><span class="keycap-label">ESC</span></div>
+    <div class="keycap" data-key="tab"><span class="keycap-label">TAB</span></div>
+    <div class="keycap" data-key="left">&larr;</div>
+    <div class="keycap" data-key="up">&uarr;</div>
+    <div class="keycap" data-key="down">&darr;</div>
+    <div class="keycap" data-key="right">&rarr;</div>
+  </div>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
 <script>
@@ -92,14 +136,19 @@ export const terminalHtml = `<!doctype html>
     var rnPost = window.ReactNativeWebView && window.ReactNativeWebView.postMessage;
     function post(s) { if (rnPost) rnPost.call(window.ReactNativeWebView, s); }
 
-    term.onData(function (data) {
-      // Fast path: encode input bytes directly to base64 via btoa.
-      // data is a JS string of UTF-16 code units; encode to UTF-8 first.
-      var bytes = new TextEncoder().encode(data);
+    // Encode a JS string to a UTF-8 base64 payload — the wire format shared
+    // by the 'i' (input) and 'B' (buffer dump) channels.
+    function utf8ToBase64(s) {
+      var bytes = new TextEncoder().encode(s);
       var binary = '';
       for (var i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-      post('i' + btoa(binary));
-    });
+      return btoa(binary);
+    }
+    // Send raw bytes to the PTY as user input. Used by xterm's onData (real
+    // keystrokes) and by the on-screen key bar (synthesized escape sequences).
+    function postInput(s) { post('i' + utf8ToBase64(s)); }
+
+    term.onData(function (data) { postInput(data); });
 
     function sendResize() {
       try { fit.fit(); } catch (e) {}
@@ -112,19 +161,13 @@ export const terminalHtml = `<!doctype html>
       for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       term.write(bytes);
     };
-    window.__auraFit = sendResize;
     window.__auraClear = function () { term.clear(); };
     // Serialize the entire active buffer (scrollback + viewport) to UTF-8 text
     // and post it back to RN. The RN side opens a modal with selectable text so
     // the user can pick a region with native handles and hit Copy. We can't
     // rely on in-place selection because xterm's rows set user-select: none and
     // the custom touch handler below claims vertical drags for scrollback.
-    function postBufferText(s) {
-      var bytes = new TextEncoder().encode(s);
-      var binary = '';
-      for (var i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-      post('B' + btoa(binary));
-    }
+    function postBufferText(s) { post('B' + utf8ToBase64(s)); }
     window.__auraDumpBuffer = function () {
       try {
         // Primary: xterm's own selectAll/getSelection. This is what xterm uses
@@ -186,7 +229,98 @@ export const terminalHtml = `<!doctype html>
       } catch (e) {}
     };
 
-    window.addEventListener('resize', sendResize);
+    // --- Viewport sizing -------------------------------------------------
+    // Keep #root's height pinned to the visible area. On iOS the soft
+    // keyboard overlays the WebView without resizing it, so visualViewport
+    // is the only signal for how much room is actually left; on Android
+    // (adjustResize) the WebView itself shrinks and visualViewport.height
+    // tracks it. Sizing #root to visualViewport.height keeps the terminal
+    // and key bar fully above the keyboard either way.
+    var rootEl = document.getElementById('root');
+    function syncViewport() {
+      var vv = window.visualViewport;
+      if (vv) {
+        rootEl.style.height = vv.height + 'px';
+        rootEl.style.transform = 'translateY(' + (vv.offsetTop || 0) + 'px)';
+      }
+      sendResize();
+    }
+    // Coalesce the bursts of visualViewport events fired during a keyboard
+    // open/close animation into one resize per frame.
+    var syncScheduled = false;
+    function scheduleSync() {
+      if (syncScheduled) return;
+      syncScheduled = true;
+      requestAnimationFrame(function () {
+        syncScheduled = false;
+        syncViewport();
+      });
+    }
+    window.__auraFit = syncViewport;
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', scheduleSync);
+      window.visualViewport.addEventListener('scroll', scheduleSync);
+    }
+    window.addEventListener('resize', scheduleSync);
+
+    // --- On-screen key bar ----------------------------------------------
+    // Soft keyboards have no arrow/Esc/Tab keys, so Claude Code's prompts
+    // (navigated with the cursor keys) could not be answered from the app.
+    // Each cap synthesizes the escape sequence a hardware key would emit and
+    // sends it through the same input channel as a keystroke.
+    var keybar = document.getElementById('keybar');
+    // Cursor keys flip between CSI ('\\x1b[A') and SS3 ('\\x1bOA') form
+    // depending on DECCKM (application cursor keys mode). xterm tracks the
+    // mode the running program asked for; mirror it so the arrows behave
+    // exactly like a physical keyboard under tmux + Claude Code.
+    function cursorSeq(letter) {
+      var app = false;
+      try { app = !!(term.modes && term.modes.applicationCursorKeysMode); } catch (e) {}
+      return '\\x1b' + (app ? 'O' : '[') + letter;
+    }
+    function keySeq(key) {
+      if (key === 'esc') return '\\x1b';
+      if (key === 'tab') return '\\t';
+      if (key === 'up') return cursorSeq('A');
+      if (key === 'down') return cursorSeq('B');
+      if (key === 'right') return cursorSeq('C');
+      if (key === 'left') return cursorSeq('D');
+      return '';
+    }
+    var caps = keybar.querySelectorAll('.keycap');
+    for (var c = 0; c < caps.length; c++) {
+      (function (cap) {
+        var key = cap.getAttribute('data-key');
+        // Handle on pointerdown, not click: preventDefault here keeps the
+        // hidden textarea focused (the cap is a non-focusable <div>), so the
+        // soft keyboard does not dismiss between presses while the user is
+        // stepping through a prompt's options.
+        cap.addEventListener('pointerdown', function (e) {
+          e.preventDefault();
+          var seq = keySeq(key);
+          if (seq) postInput(seq);
+          cap.classList.add('pressed');
+        }, { passive: false });
+        function release() { cap.classList.remove('pressed'); }
+        cap.addEventListener('pointerup', release);
+        cap.addEventListener('pointercancel', release);
+        cap.addEventListener('pointerleave', release);
+      })(caps[c]);
+    }
+    // Tie the bar's visibility to the keyboard: xterm's helper textarea is
+    // focused exactly when the soft keyboard is up. Re-fit on every toggle
+    // so the bar's strip of height is taken from the terminal, not painted
+    // over the bottom row of output.
+    function setKeybar(visible) {
+      if (keybar.classList.contains('visible') === visible) return;
+      keybar.classList.toggle('visible', visible);
+      scheduleSync();
+    }
+    var helperTextarea = document.querySelector('.xterm-helper-textarea');
+    if (helperTextarea) {
+      helperTextarea.addEventListener('focus', function () { setKeybar(true); });
+      helperTextarea.addEventListener('blur', function () { setKeybar(false); });
+    }
 
     // Touch-drag scrollback. xterm-screen sits on top of xterm-viewport and
     // absorbs pointer events, so native overflow-scroll on the viewport never
@@ -230,7 +364,7 @@ export const terminalHtml = `<!doctype html>
 
     // Initial handshake once layout has settled.
     requestAnimationFrame(function () {
-      sendResize();
+      syncViewport();
       post('R');
     });
   })();
