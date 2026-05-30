@@ -88,6 +88,7 @@ export const terminalHtml = `<!doctype html>
     <div class="keycap" data-key="up">&uarr;</div>
     <div class="keycap" data-key="down">&darr;</div>
     <div class="keycap" data-key="right">&rarr;</div>
+    <div class="keycap" data-key="enter">&#9166;</div>
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
@@ -285,6 +286,7 @@ export const terminalHtml = `<!doctype html>
       if (key === 'down') return cursorSeq('B');
       if (key === 'right') return cursorSeq('C');
       if (key === 'left') return cursorSeq('D');
+      if (key === 'enter') return '\\r';
       return '';
     }
     var caps = keybar.querySelectorAll('.keycap');
