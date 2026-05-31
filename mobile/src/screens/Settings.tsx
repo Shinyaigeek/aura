@@ -1,4 +1,5 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import Constants from "expo-constants";
 import { useEffect, useState } from "react";
 import {
   Alert,
@@ -67,6 +68,10 @@ export default function SettingsScreen({ navigation }: Props) {
   if (!loaded) return <View style={styles.container} />;
 
   const inputStyle = (key: FieldKey) => [styles.input, focused === key && styles.inputFocused];
+
+  // Version comes from app.json's expo.version (the single source bumped each
+  // release). expoConfig is null in odd embedded contexts, so fall back gracefully.
+  const appVersion = Constants.expoConfig?.version ?? "unknown";
 
   return (
     <KeyboardAvoidingView
@@ -145,6 +150,8 @@ export default function SettingsScreen({ navigation }: Props) {
             </View>
           </View>
         )}
+
+        <Text style={styles.versionText}>aura v{appVersion}</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -237,5 +244,12 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     flex: 1,
     marginRight: 12,
+  },
+
+  versionText: {
+    color: "#4a4e63",
+    fontSize: 12,
+    textAlign: "center",
+    marginTop: 4,
   },
 });
