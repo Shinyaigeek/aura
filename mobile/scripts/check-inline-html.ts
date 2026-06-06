@@ -12,11 +12,13 @@
 import { parse } from "@babel/parser";
 
 import { fileViewerHtml } from "../src/lib/file-viewer-html";
+import { mediaViewerHtml } from "../src/lib/media-viewer-html";
 import { terminalHtml } from "../src/lib/terminal-html";
 
 const cases: { name: string; html: string }[] = [
   { name: "terminalHtml", html: terminalHtml },
   { name: "fileViewerHtml", html: fileViewerHtml },
+  { name: "mediaViewerHtml", html: mediaViewerHtml },
 ];
 
 let failed = false;

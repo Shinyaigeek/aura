@@ -20,6 +20,7 @@ import (
 	"github.com/Shinyaigeek/aura/server/internal/events"
 	"github.com/Shinyaigeek/aura/server/internal/notify"
 	"github.com/Shinyaigeek/aura/server/internal/session"
+	"github.com/Shinyaigeek/aura/server/internal/shares"
 	"github.com/Shinyaigeek/aura/server/internal/tmux"
 	"github.com/Shinyaigeek/aura/server/internal/upload"
 	"github.com/Shinyaigeek/aura/server/internal/ws"
@@ -38,6 +39,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "share":
+			if err := runShare(rest); err != nil {
+				fmt.Fprintln(os.Stderr, "share:", err)
+				os.Exit(1)
+			}
+			return
 		default:
 			fmt.Fprintln(os.Stderr, "unknown subcommand:", sub)
 			os.Exit(2)
@@ -49,6 +56,7 @@ func main() {
 		token    = flag.String("token", os.Getenv("AURA_TOKEN"), "shared auth token (env AURA_TOKEN)")
 		shell    = flag.String("shell", defaultShell(), "shell to run inside tmux when a new session is created")
 		difitCmd = flag.String("difit-cmd", defaultDifitCmd(), "command used to spawn difit (env AURA_DIFIT_CMD)")
+		shareDir = flag.String("share-dir", defaultShareDir(), "directory served at /shares — drop a file here to share it with the mobile app (env AURA_SHARE_DIR)")
 	)
 	flag.Parse()
 
@@ -59,13 +67,27 @@ func main() {
 		slog.Warn("AURA_TOKEN is empty; server will reject all WebSocket upgrades")
 	}
 
+	// The share store serves a well-known directory at /shares. Anything a
+	// process on this host writes there (a screenshot, a recording) shows
+	// up in the mobile app's gallery. Created up front so we can fail fast
+	// if the path is unusable and so AURA_SHARE_DIR carries the resolved
+	// absolute path.
+	shareStore, err := shares.NewStore(*shareDir)
+	if err != nil {
+		slog.Error("share dir unusable", "dir", *shareDir, "err", err)
+		os.Exit(1)
+	}
+	slog.Info("serving shares", "dir", shareStore.Dir())
+
 	mgr := session.NewManager(*shell)
-	// Expose AURA_SESSION_ID / AURA_URL / AURA_TOKEN to each spawned shell so
-	// a Claude Code Stop hook (which runs as a subprocess of that shell) can
-	// POST back here without needing to know anything about the server.
+	// Expose AURA_SESSION_ID / AURA_URL / AURA_TOKEN / AURA_SHARE_DIR to each
+	// spawned shell so a Claude Code Stop hook (which runs as a subprocess of
+	// that shell) can POST back here, and so Claude knows where to drop files
+	// it wants to share — all without needing to know anything else about the
+	// server.
 	hookURL := hookCallbackURL(*addr)
 	mgr.SetExtraEnv(func(id string) []string {
-		env := []string{"AURA_SESSION_ID=" + id}
+		env := []string{"AURA_SESSION_ID=" + id, "AURA_SHARE_DIR=" + shareStore.Dir()}
 		if hookURL != "" {
 			env = append(env, "AURA_URL="+hookURL)
 		}
@@ -101,6 +123,8 @@ func main() {
 	mux.Handle("DELETE /sessions/{id}", authMw(wrappedKill))
 	mux.Handle("GET /sessions/{id}/meta", authMw(notify.NewMetaHandler(cwdLookup, titles)))
 	mux.Handle("POST /sessions/{id}/upload", authMw(upload.NewHandler(cwdLookup)))
+	mux.Handle("GET /shares", authMw(shareStore.ListHandler()))
+	mux.Handle("GET /shares/{name}", authMw(shareStore.FileHandler()))
 	mux.Handle("POST /sessions/{id}/difit", authMw(difit.NewStartHandler(difitMgr, cwdLookup)))
 	mux.Handle("DELETE /sessions/{id}/difit", authMw(difit.NewStopHandler(difitMgr)))
 	mux.Handle("POST /hooks/stop", authMw(notify.NewStopHookHandler(hub, titles)))
@@ -145,6 +169,17 @@ func defaultDifitCmd() string {
 		return s
 	}
 	return "difit"
+}
+
+// defaultShareDir is where shared files live unless overridden. We keep it
+// under ~/.aura so the path is stable and predictable: a process can share
+// a file with the mobile app by writing into AURA_SHARE_DIR (injected into
+// every pane) or, when it doesn't know about aura, into this fixed default.
+func defaultShareDir() string {
+	if s := os.Getenv("AURA_SHARE_DIR"); s != "" {
+		return s
+	}
+	return "~/.aura/share"
 }
 
 // hookCallbackURL turns the server's listen address into the http base URL

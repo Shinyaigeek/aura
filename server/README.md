@@ -32,6 +32,10 @@ export AURA_TOKEN=$(openssl rand -hex 32)
   [difit](https://github.com/yoshiko-pg/difit) instance bound to a free
   port in the session's pane cwd. Response: `{"port":<n>}`.
 - `DELETE /sessions/<id>/difit` — stops it.
+- `GET /shares` — lists the files in the share directory, newest first:
+  `[{"name","size","modUnix","mime","url"}]`.
+- `GET /shares/<name>` — streams one shared file (supports HTTP range, so
+  the app can scrub video).
 - `POST /devices/register` — registers a mobile Expo push token.
 - `POST /hooks/stop` — Claude Code Stop-hook callback; fans a push
   notification out to every registered device.
@@ -57,6 +61,38 @@ missing) to install an idempotent Stop hook tagged with `# aura-hook`.
 Re-running the command replaces the existing entry in place rather
 than appending a duplicate. Pass `-dry-run` to preview the result, or
 `-file <path>` to target a different settings file.
+
+## Sharing files back to the phone
+
+The reverse of upload: a program on the host hands a file (a screenshot,
+a screen recording, a generated chart) to the mobile user by dropping it
+into the **share directory**, which aura-server serves at `/shares`. The
+mobile app has a "Shared with you" gallery (the ▦ button) that lists and
+previews whatever lands there.
+
+- Default directory: `~/.aura/share`. Override with `-share-dir <path>`
+  or the `AURA_SHARE_DIR` env var. It is created on startup.
+- aura-server injects `AURA_SHARE_DIR` into every tmux pane, so a process
+  running inside an aura session — e.g. Claude Code — can share with:
+
+  ```sh
+  cp screenshot.png "$AURA_SHARE_DIR/"
+  ```
+
+- Outside aura (Claude Code run directly on the host, no server pane),
+  the same default path applies. The bundled helper copies a file into
+  the share dir and works whether or not the server is running:
+
+  ```sh
+  aura-server share screenshot.png        # → prints the destination path
+  aura-server share -dir /custom clip.mp4
+  ```
+
+So that Claude knows the convention even outside aura, add a line to your
+`~/.claude/CLAUDE.md`:
+
+> To show me a file, copy it into `$AURA_SHARE_DIR` (default
+> `~/.aura/share`), e.g. `cp out.png "$AURA_SHARE_DIR/"`.
 
 ## Install as a systemd service
 

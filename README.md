@@ -34,6 +34,13 @@ Key property: **the tmux session outlives the client.** The mobile app
 is a dumb renderer that attaches/detaches. Backgrounding, network drops,
 process kills — none of them touch the running `claude` process.
 
+Files move both ways: the app can upload into the host, and the host can
+hand files back. Anything dropped into the share directory
+(`$AURA_SHARE_DIR`, default `~/.aura/share`) shows up in the app's
+"Shared with you" gallery — so Claude Code can return a screenshot or a
+recording with a plain `cp out.png "$AURA_SHARE_DIR/"`. See
+[`server/README.md`](server/README.md#sharing-files-back-to-the-phone).
+
 ## Components
 
 - `server/` — Go WebSocket server that manages tmux sessions and proxies
