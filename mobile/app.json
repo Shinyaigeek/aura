@@ -52,6 +52,14 @@
         {
           "photosPermission": "aura uses your photo library to send images to your aura-server."
         }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "aura uses the microphone so you can dictate prompts.",
+          "speechRecognitionPermission": "aura uses speech recognition to turn your voice into text.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+        }
       ]
     ]
   }

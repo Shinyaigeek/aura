@@ -26,10 +26,12 @@ import { difitUrl, startDifit } from "@/lib/difit-client";
 import { killSession } from "@/lib/kill-session";
 import {
   loadConfig,
+  loadPrefs,
   loadTabs,
   nextTabId,
   saveTabs,
   type ServerConfig,
+  subscribePrefs,
   type Tab,
   type TabsState,
 } from "@/lib/storage";
@@ -38,8 +40,10 @@ import { useSessionMetaMap, type SessionMeta } from "@/lib/session-meta";
 import { terminalHtml } from "@/lib/terminal-html";
 import { uploadFile, type UploadProgress } from "@/lib/upload";
 import { WsClient, type WsStatus } from "@/lib/ws";
+import VoiceMic from "@/components/VoiceMic";
 import DirectoryBrowser from "./DirectoryBrowser";
 import FileViewer from "./FileViewer";
+import SharedGallery from "./SharedGallery";
 
 type PickedFile = {
   uri: string;
@@ -66,7 +70,9 @@ export default function TerminalScreen({ navigation }: Props) {
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [copyText, setCopyText] = useState<string | null>(null);
   const [viewingFile, setViewingFile] = useState<string | null>(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [voiceLang, setVoiceLang] = useState("en-US");
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -120,6 +126,20 @@ export default function TerminalScreen({ navigation }: Props) {
     return unsub;
   }, []);
 
+  // Voice dictation language comes from Prefs; keep it live so a change in
+  // Settings takes effect without a remount.
+  useEffect(() => {
+    let cancelled = false;
+    void loadPrefs().then((p) => {
+      if (!cancelled) setVoiceLang(p.voiceLang);
+    });
+    const unsub = subscribePrefs((p) => setVoiceLang(p.voiceLang));
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -158,6 +178,17 @@ export default function TerminalScreen({ navigation }: Props) {
     // Tapping a header button steals focus from the WebView's hidden textarea
     // and dismisses the soft keyboard. Re-focus so the user can keep typing
     // the next thing Claude prompts for without re-tapping the terminal.
+    websRef.current[id]?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
+  }, []);
+
+  // Voice dictation injects the transcript at the active session's prompt as
+  // raw stdin — no trailing newline, so the user reviews and submits it. Then
+  // refocus the terminal so the keyboard returns for editing (same trick as
+  // onEscPress).
+  const onVoiceTranscript = useCallback((text: string) => {
+    const id = activeTabIdRef.current;
+    if (!id) return;
+    clientsRef.current[id]?.sendInput(`${text} `);
     websRef.current[id]?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
   }, []);
 
@@ -218,6 +249,13 @@ export default function TerminalScreen({ navigation }: Props) {
             style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
           >
             <Text style={styles.headerIcon}>▤</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setGalleryOpen(true)}
+            hitSlop={10}
+            style={({ pressed }) => [styles.headerIconButton, pressed && { opacity: 0.55 }]}
+          >
+            <Text style={styles.headerIcon}>▦</Text>
           </Pressable>
           <Pressable
             onPress={onDifitPress}
@@ -364,6 +402,7 @@ export default function TerminalScreen({ navigation }: Props) {
             onBuffer={handleBufferDump}
           />
         ))}
+        <VoiceMic lang={voiceLang} onTranscript={onVoiceTranscript} />
       </View>
       {activeStatus !== "open" && <OfflineBanner status={activeStatus} />}
 
@@ -401,6 +440,15 @@ export default function TerminalScreen({ navigation }: Props) {
             onClose={() => setViewingFile(null)}
           />
         )}
+      </Modal>
+
+      <Modal
+        visible={galleryOpen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setGalleryOpen(false)}
+      >
+        <SharedGallery cfg={cfg} onClose={() => setGalleryOpen(false)} />
       </Modal>
 
       <Modal

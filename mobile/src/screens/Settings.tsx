@@ -26,11 +26,11 @@ import {
 
 type Props = NativeStackScreenProps<RootStackParamList, "Settings">;
 
-type FieldKey = "url" | "token";
+type FieldKey = "url" | "token" | "voiceLang";
 
 export default function SettingsScreen({ navigation }: Props) {
   const [cfg, setCfg] = useState<ServerConfig>({ url: "", token: "" });
-  const [prefs, setPrefs] = useState<Prefs>({ keepAliveInBackground: false });
+  const [prefs, setPrefs] = useState<Prefs>({ keepAliveInBackground: false, voiceLang: "en-US" });
   const [loaded, setLoaded] = useState(false);
   const [focused, setFocused] = useState<FieldKey | null>(null);
 
@@ -44,6 +44,12 @@ export default function SettingsScreen({ navigation }: Props) {
 
   const onToggleKeepAlive = (value: boolean) => {
     const next: Prefs = { ...prefs, keepAliveInBackground: value };
+    setPrefs(next);
+    void savePrefs(next);
+  };
+
+  const onChangeVoiceLang = (voiceLang: string) => {
+    const next: Prefs = { ...prefs, voiceLang };
     setPrefs(next);
     void savePrefs(next);
   };
@@ -150,6 +156,30 @@ export default function SettingsScreen({ navigation }: Props) {
             </View>
           </View>
         )}
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Voice</Text>
+          <Text style={styles.cardSubtitle}>
+            Language used when you dictate a prompt with the mic button.
+          </Text>
+          <View style={styles.field}>
+            <Text style={styles.label}>Dictation language</Text>
+            <TextInput
+              style={inputStyle("voiceLang")}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="en-US"
+              placeholderTextColor="#4a4e63"
+              value={prefs.voiceLang}
+              onChangeText={onChangeVoiceLang}
+              onFocus={() => setFocused("voiceLang")}
+              onBlur={() => setFocused(null)}
+            />
+            <Text style={styles.hint}>
+              BCP-47 tag, e.g. en-US, ja-JP, es-ES. Must match the language you speak.
+            </Text>
+          </View>
+        </View>
 
         <Text style={styles.versionText}>aura v{appVersion}</Text>
       </ScrollView>

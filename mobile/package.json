@@ -29,6 +29,7 @@
     "expo-file-system": "~17.0.1",
     "expo-image-picker": "~15.0.7",
     "expo-notifications": "~0.28.19",
+    "expo-speech-recognition": "0.3.2",
     "expo-splash-screen": "~0.27.5",
     "expo-status-bar": "~1.12.1",
     "react": "18.2.0",
