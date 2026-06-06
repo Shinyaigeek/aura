@@ -987,6 +987,10 @@ function TabBar({
           const custom = tab.customLabel?.trim();
           const label =
             custom && custom.length > 0 ? custom : title && title.length > 0 ? title : tab.label;
+          // Workspace = the basename of the session's cwd, so each tab shows
+          // which project/folder it's attached to (the server-derived cwd).
+          const cwd = metaMap[tab.id]?.cwd?.trim();
+          const workspace = cwd ? cwd.replace(/\/+$/, "").split("/").pop() : undefined;
           return (
             <Pressable
               key={tab.id}
@@ -1000,12 +1004,19 @@ function TabBar({
               ]}
             >
               <View style={[styles.statusDot, statusDotStyle(status), styles.tabPillDot]} />
-              <Text
-                style={[styles.tabPillText, isActive && styles.tabPillTextActive]}
-                numberOfLines={1}
-              >
-                {label}
-              </Text>
+              <View style={styles.tabPillLabels}>
+                <Text
+                  style={[styles.tabPillText, isActive && styles.tabPillTextActive]}
+                  numberOfLines={1}
+                >
+                  {label}
+                </Text>
+                {workspace ? (
+                  <Text style={styles.tabPillWorkspace} numberOfLines={1}>
+                    {workspace}
+                  </Text>
+                ) : null}
+              </View>
               <Pressable
                 onPress={() => onClose(tab.id)}
                 hitSlop={8}
@@ -1113,14 +1124,21 @@ const styles = StyleSheet.create({
     borderColor: "#3b4262",
   },
   tabPillDot: { marginRight: 6 },
+  tabPillLabels: { maxWidth: 120 },
   tabPillText: {
     color: "#8b90a8",
     fontSize: 13,
     fontWeight: "500",
     letterSpacing: 0.2,
-    maxWidth: 120,
   },
   tabPillTextActive: { color: "#e4e6ef" },
+  tabPillWorkspace: {
+    color: "#5b6076",
+    fontSize: 10,
+    fontWeight: "500",
+    letterSpacing: 0.2,
+    marginTop: 1,
+  },
   tabCloseButton: {
     marginLeft: 6,
     width: 20,
