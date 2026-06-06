@@ -26,7 +26,7 @@ func runShare(args []string) error {
 	}
 	files := fs.Args()
 	if len(files) == 0 {
-		return errors.New("usage: aura-server share [-dir <path>] <file>...")
+		return errors.New("no files given; usage: aura-server share [-dir <path>] FILE")
 	}
 
 	store, err := shares.NewStore(*dir)
