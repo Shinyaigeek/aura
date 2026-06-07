@@ -127,6 +127,50 @@ func TestEncodeProjectDir(t *testing.T) {
 
 // Helpers
 
+func TestExtractLastAssistantMessage(t *testing.T) {
+	path := writeTranscript(t, `{"type":"user","message":{"content":"hi"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"first reply"}]}}
+{"type":"user","message":{"content":"more"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done. Next: run the tests."}]}}
+`)
+	got, err := extractLastAssistantMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Last text-bearing assistant line wins; the tool-only turn after "first
+	// reply" must not shadow it.
+	if got != "Done. Next: run the tests." {
+		t.Errorf("want last assistant text, got %q", got)
+	}
+}
+
+func TestExtractLastAssistantMessage_JoinsTextParts(t *testing.T) {
+	path := writeTranscript(t,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Summary."},{"type":"tool_use","name":"x"},{"type":"text","text":"Next steps."}]}}
+`)
+	got, err := extractLastAssistantMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Summary.\n\nNext steps." {
+		t.Errorf("want joined text parts, got %q", got)
+	}
+}
+
+func TestExtractLastAssistantMessage_NoneReturnsEmpty(t *testing.T) {
+	path := writeTranscript(t, `{"type":"user","message":{"content":"hi"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}
+`)
+	got, err := extractLastAssistantMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("want empty (no text turns), got %q", got)
+	}
+}
+
 func writeTranscript(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()

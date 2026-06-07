@@ -38,6 +38,9 @@ func (s stubTitles) LookupByCwd(string) (ccmeta.Meta, error) { return ccmeta.Met
 func (s stubTitles) ReadPath(p string) (ccmeta.Meta, error) {
 	return s.byPath[p], nil
 }
+func (s stubTitles) LastAssistantMessage(p string) (string, error) {
+	return s.byPath[p].Title, nil
+}
 
 func TestStopHookHandler_BroadcastsWithSessionFromHeader(t *testing.T) {
 	hub := &fakeHub{}

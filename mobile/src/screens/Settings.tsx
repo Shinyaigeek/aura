@@ -30,7 +30,11 @@ type FieldKey = "url" | "token" | "voiceLang";
 
 export default function SettingsScreen({ navigation }: Props) {
   const [cfg, setCfg] = useState<ServerConfig>({ url: "", token: "" });
-  const [prefs, setPrefs] = useState<Prefs>({ keepAliveInBackground: false, voiceLang: "en-US" });
+  const [prefs, setPrefs] = useState<Prefs>({
+    keepAliveInBackground: false,
+    voiceLang: "en-US",
+    speakReplies: false,
+  });
   const [loaded, setLoaded] = useState(false);
   const [focused, setFocused] = useState<FieldKey | null>(null);
 
@@ -50,6 +54,12 @@ export default function SettingsScreen({ navigation }: Props) {
 
   const onChangeVoiceLang = (voiceLang: string) => {
     const next: Prefs = { ...prefs, voiceLang };
+    setPrefs(next);
+    void savePrefs(next);
+  };
+
+  const onToggleSpeakReplies = (value: boolean) => {
+    const next: Prefs = { ...prefs, speakReplies: value };
     setPrefs(next);
     void savePrefs(next);
   };
@@ -160,10 +170,11 @@ export default function SettingsScreen({ navigation }: Props) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Voice</Text>
           <Text style={styles.cardSubtitle}>
-            Language used when you dictate a prompt with the mic button.
+            Dictate prompts with the mic button, and have Claude's replies read aloud when a session
+            finishes.
           </Text>
           <View style={styles.field}>
-            <Text style={styles.label}>Dictation language</Text>
+            <Text style={styles.label}>Language</Text>
             <TextInput
               style={inputStyle("voiceLang")}
               autoCapitalize="none"
@@ -176,9 +187,21 @@ export default function SettingsScreen({ navigation }: Props) {
               onBlur={() => setFocused(null)}
             />
             <Text style={styles.hint}>
-              BCP-47 tag, e.g. en-US, ja-JP, es-ES. Must match the language you speak.
+              BCP-47 tag, e.g. en-US, ja-JP, es-ES. Used for both dictation and read-aloud.
             </Text>
           </View>
+          <View style={styles.toggleRow}>
+            <Text style={styles.toggleLabel}>Speak Claude's replies</Text>
+            <Switch
+              value={prefs.speakReplies}
+              onValueChange={onToggleSpeakReplies}
+              trackColor={{ false: "#242634", true: "#3b4262" }}
+              thumbColor={prefs.speakReplies ? "#7aa2f7" : "#6b7089"}
+            />
+          </View>
+          <Text style={styles.hint}>
+            Reads the closing message aloud when the app is open and a session finishes.
+          </Text>
         </View>
 
         <Text style={styles.versionText}>aura v{appVersion}</Text>

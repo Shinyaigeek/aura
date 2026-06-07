@@ -36,12 +36,21 @@ export type Prefs = {
   // long as it's on, in exchange for ~3 min of background uptime
   // (Notifee uses Android's shortService type).
   keepAliveInBackground: boolean;
-  // BCP-47 locale used for voice dictation (the mic button). Must match the
-  // language actually spoken, so it's user-configurable — e.g. "ja-JP".
+  // BCP-47 locale used for voice dictation (the mic button) AND for reading
+  // Claude's replies aloud. Must match the language actually spoken/expected,
+  // so it's user-configurable — e.g. "ja-JP".
   voiceLang: string;
+  // Speak Claude's closing message aloud when a session finishes (the Stop
+  // event), via on-device text-to-speech. Off by default — opt-in so the
+  // phone doesn't start talking unexpectedly.
+  speakReplies: boolean;
 };
 
-const defaultPrefs: Prefs = { keepAliveInBackground: false, voiceLang: "en-US" };
+const defaultPrefs: Prefs = {
+  keepAliveInBackground: false,
+  voiceLang: "en-US",
+  speakReplies: false,
+};
 
 const defaultTabs: TabsState = {
   tabs: [{ id: "default", label: "default" }],
@@ -92,6 +101,7 @@ export async function loadPrefs(): Promise<Prefs> {
         typeof parsed.voiceLang === "string" && parsed.voiceLang.trim()
           ? parsed.voiceLang
           : defaultPrefs.voiceLang,
+      speakReplies: parsed.speakReplies === true,
     };
   } catch {
     return defaultPrefs;

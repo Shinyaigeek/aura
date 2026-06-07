@@ -27,6 +27,11 @@ type Event struct {
 	SessionID string `json:"sessionId,omitempty"`
 	Title     string `json:"title,omitempty"`
 	Body      string `json:"body,omitempty"`
+	// Summary carries the assistant's closing message (Stop events only) so a
+	// client can read it aloud. Kept separate from Body, which stays the short
+	// notification text, so text-to-speech and notifications don't fight over
+	// one field.
+	Summary string `json:"summary,omitempty"`
 }
 
 // Hub is a fan-out broadcaster. The zero value is unusable; call New.

@@ -36,6 +36,17 @@ const headByteCap = 64 << 10
 // push-notification body. Runes, not bytes, because CJK / emoji.
 const titleRuneCap = 80
 
+// tailByteCap bounds how much of a transcript we read from the END when
+// looking for the last assistant message (used for text-to-speech). The
+// final assistant turn is always the last few lines, so a tail window avoids
+// scanning a multi-megabyte transcript on every Stop hook.
+const tailByteCap = 256 << 10
+
+// summaryRuneCap bounds the spoken-summary length. Generous compared to a
+// title (the client trims/cleans further for speech) but small enough to keep
+// the event payload and the spoken output sane.
+const summaryRuneCap = 1200
+
 // Meta is what the server surfaces for a given session.
 type Meta struct {
 	Title        string    `json:"title,omitempty"`
@@ -117,6 +128,19 @@ func (c *Cache) ReadPath(path string) (Meta, error) {
 		return Meta{}, err
 	}
 	return Meta{Title: title, TranscriptAt: modTime}, nil
+}
+
+// LastAssistantMessage returns the text of the most recent assistant message
+// in the transcript — what Claude said when it finished the turn — suitable
+// for reading aloud. Assistant turns that carry only tool calls (no text) are
+// skipped. Returns "" (not an error) when none is found. Not cached: it's
+// called once per Stop hook, and the file's tail changes every turn anyway.
+func (c *Cache) LastAssistantMessage(path string) (string, error) {
+	text, err := extractLastAssistantMessage(path)
+	if err != nil {
+		return "", err
+	}
+	return truncateRunes(strings.TrimSpace(text), summaryRuneCap), nil
 }
 
 // latestTranscriptForCwd scans ~/.claude/projects/<encoded-cwd>/*.jsonl and
@@ -222,6 +246,102 @@ func parseUserLine(line []byte) (string, bool) {
 		return "", false
 	}
 	return text, true
+}
+
+// extractLastAssistantMessage reads the tail of a JSONL transcript and
+// returns the text of the last `type:"assistant"` line that carries text.
+// Reading only the last tailByteCap bytes keeps this cheap on long sessions;
+// if the file is larger we seek in and discard the first (partial) line.
+func extractLastAssistantMessage(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	var start int64
+	if info.Size() > tailByteCap {
+		start = info.Size() - tailByteCap
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return "", err
+	}
+
+	sc := bufio.NewScanner(f)
+	// Transcript lines can be large (a long assistant message on one line);
+	// raise the scanner's max token size well above the default 64 KiB.
+	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
+
+	first := start > 0 // first line is likely a partial; skip it
+	var last string
+	for sc.Scan() {
+		if first {
+			first = false
+			continue
+		}
+		if text, ok := parseAssistantLine(sc.Bytes()); ok {
+			last = text
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", err
+	}
+	return last, nil
+}
+
+// parseAssistantLine decodes one JSONL line; returns (text, true) only when
+// the line is an assistant message with non-empty text content (tool-only
+// turns return false so they don't shadow the real final message).
+func parseAssistantLine(line []byte) (string, bool) {
+	var e struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content any `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &e); err != nil {
+		return "", false
+	}
+	if e.Type != "assistant" {
+		return "", false
+	}
+	text := strings.TrimSpace(extractAllText(e.Message.Content))
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+// extractAllText joins every text part of a message's content, in order, with
+// blank lines between them. Unlike extractText (first-fragment only), an
+// assistant message often has several text blocks interleaved with tool calls
+// and we want the whole spoken summary.
+func extractAllText(content any) string {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []any:
+		var parts []string
+		for _, part := range c {
+			m, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			if m["type"] != "text" {
+				continue
+			}
+			if t, ok := m["text"].(string); ok && t != "" {
+				parts = append(parts, t)
+			}
+		}
+		return strings.Join(parts, "\n\n")
+	}
+	return ""
 }
 
 // extractText collapses a user message's content value to its first visible

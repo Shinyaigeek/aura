@@ -29,6 +29,9 @@ type CwdLookup func(sessionID string) (string, error)
 type TitleReader interface {
 	LookupByCwd(cwd string) (ccmeta.Meta, error)
 	ReadPath(path string) (ccmeta.Meta, error)
+	// LastAssistantMessage returns the assistant's closing text for a
+	// transcript, for read-aloud. "" when unavailable.
+	LastAssistantMessage(path string) (string, error)
 }
 
 // Broadcaster is the subset of *events.Hub this package needs. Kept as an
@@ -83,11 +86,21 @@ func NewStopHookHandler(hub Broadcaster, titles TitleReader) http.Handler {
 			}
 		}
 
+		// Best-effort spoken summary: the assistant's closing message. Carried
+		// separately from Body so the notification text is unaffected.
+		var summary string
+		if titles != nil && in.TranscriptPath != "" {
+			if s, err := titles.LastAssistantMessage(in.TranscriptPath); err == nil {
+				summary = s
+			}
+		}
+
 		hub.Broadcast(events.Event{
 			Type:      "stop",
 			SessionID: sessionID,
 			Title:     title,
 			Body:      msgBody,
+			Summary:   summary,
 		})
 		w.WriteHeader(http.StatusNoContent)
 	})
