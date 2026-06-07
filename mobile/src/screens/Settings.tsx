@@ -23,6 +23,7 @@ import {
   savePrefs,
   type ServerConfig,
 } from "@/lib/storage";
+import { fetchServerVersion } from "@/lib/version-client";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Settings">;
 
@@ -37,12 +38,17 @@ export default function SettingsScreen({ navigation }: Props) {
   });
   const [loaded, setLoaded] = useState(false);
   const [focused, setFocused] = useState<FieldKey | null>(null);
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([loadConfig(), loadPrefs()]).then(([c, p]) => {
       setCfg(c);
       setPrefs(p);
       setLoaded(true);
+      // Best-effort: show which server we're pointed at. Resolves to null
+      // (rendered as "unreachable") when the server is down or too old to
+      // serve /version, so it never blocks the screen.
+      void fetchServerVersion(c).then(setServerVersion);
     });
   }, []);
 
@@ -204,7 +210,8 @@ export default function SettingsScreen({ navigation }: Props) {
           </Text>
         </View>
 
-        <Text style={styles.versionText}>aura v{appVersion}</Text>
+        <Text style={styles.versionText}>app v{appVersion}</Text>
+        <Text style={styles.versionText}>server {serverVersion ?? "unreachable"}</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );

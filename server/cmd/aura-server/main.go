@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,13 @@ import (
 	"github.com/Shinyaigeek/aura/server/internal/ws"
 )
 
+// version is the running server's version, e.g. "v0.1.0". It is stamped at
+// build time via -ldflags "-X main.version=..." (see server-release.yml) and
+// defaults to "dev" for local builds. Surfaced on startup, via the `version`
+// subcommand / -version flag, and over GET /version so the mobile app can show
+// which server it's talking to.
+var version = "dev"
+
 func main() {
 	// Subcommand dispatch. Keep this surface minimal: the server is the
 	// only long-running mode, side-commands (setup-hooks, etc.) are small
@@ -33,6 +41,9 @@ func main() {
 	if len(os.Args) >= 2 && !strings.HasPrefix(os.Args[1], "-") {
 		sub, rest := os.Args[1], os.Args[2:]
 		switch sub {
+		case "version":
+			fmt.Println(version)
+			return
 		case "setup-hooks":
 			if err := runSetupHooks(rest); err != nil {
 				fmt.Fprintln(os.Stderr, "setup-hooks:", err)
@@ -52,16 +63,23 @@ func main() {
 	}
 
 	var (
-		addr     = flag.String("addr", ":8787", "listen address")
-		token    = flag.String("token", os.Getenv("AURA_TOKEN"), "shared auth token (env AURA_TOKEN)")
-		shell    = flag.String("shell", defaultShell(), "shell to run inside tmux when a new session is created")
-		difitCmd = flag.String("difit-cmd", defaultDifitCmd(), "command used to spawn difit (env AURA_DIFIT_CMD)")
-		shareDir = flag.String("share-dir", defaultShareDir(), "directory served at /shares — drop a file here to share it with the mobile app (env AURA_SHARE_DIR)")
+		showVersion = flag.Bool("version", false, "print version and exit")
+		addr        = flag.String("addr", ":8787", "listen address")
+		token       = flag.String("token", os.Getenv("AURA_TOKEN"), "shared auth token (env AURA_TOKEN)")
+		shell       = flag.String("shell", defaultShell(), "shell to run inside tmux when a new session is created")
+		difitCmd    = flag.String("difit-cmd", defaultDifitCmd(), "command used to spawn difit (env AURA_DIFIT_CMD)")
+		shareDir    = flag.String("share-dir", defaultShareDir(), "directory served at /shares — drop a file here to share it with the mobile app (env AURA_SHARE_DIR)")
 	)
 	flag.Parse()
 
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+	slog.Info("aura-server starting", "version", version)
 
 	if *token == "" {
 		slog.Warn("AURA_TOKEN is empty; server will reject all WebSocket upgrades")
@@ -117,6 +135,13 @@ func main() {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	// Unauthenticated like /healthz: the version is not a secret, and keeping
+	// it token-free lets the mobile app display which server it's pointed at
+	// even before the user has saved a token.
+	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":` + strconv.Quote(version) + `}`))
 	})
 	mux.Handle("GET /ws", authMw(ws.NewHandler(mgr)))
 	mux.Handle("GET /events", authMw(events.NewHandler(hub)))

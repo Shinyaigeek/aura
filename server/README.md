@@ -20,9 +20,16 @@ export AURA_TOKEN=$(openssl rand -hex 32)
 ./bin/aura-server -addr :8787
 ```
 
+Print the version and exit with `./bin/aura-server -version` (or
+`./bin/aura-server version`). Local builds report `dev`; release builds are
+stamped with the tag via `-ldflags "-X main.version=..."`.
+
 ## Endpoints
 
 - `GET /healthz` — liveness probe.
+- `GET /version` — server version, unauthenticated: `{"version":"v0.1.0"}`
+  (`"dev"` for local builds). The mobile app polls this to show which
+  server it's connected to.
 - `GET /ws?session=<id>` — WebSocket upgrade. Auth via `Authorization:
   Bearer <token>`, `?token=<token>`, or the `bearer.<token>`
   subprotocol.
