@@ -152,7 +152,21 @@ export const terminalHtml = `<!doctype html>
     term.onData(function (data) { postInput(data); });
 
     function sendResize() {
+      var prevCols = term.cols;
       try { fit.fit(); } catch (e) {}
+      // A column-count change (e.g. device rotation) makes xterm reflow the
+      // existing rows. Any line that was wider than the new width leaves a
+      // wrapped remnant, and tmux's post-resize repaint paints its grid in
+      // place at the new size without erasing that remnant — so the leftover
+      // shows up as duplicated/garbled lines on screen. Clearing here drops the
+      // stale buffer so tmux's redraw (which a cols change always triggers)
+      // lands on a blank grid. clear() keeps terminal modes (application cursor
+      // keys, mouse, alternate-buffer state) intact, unlike a full reset().
+      // Gate on cols only: a rows-only change (soft keyboard open/close) doesn't
+      // reflow, so clearing there would just flash the terminal for nothing.
+      if (term.cols !== prevCols) {
+        try { term.clear(); } catch (e) {}
+      }
       post('r' + term.rows + ',' + term.cols);
     }
 
