@@ -40,7 +40,8 @@ import { useSessionMetaMap, type SessionMeta } from "@/lib/session-meta";
 import { terminalHtml } from "@/lib/terminal-html";
 import { uploadFile, type UploadProgress } from "@/lib/upload";
 import { WsClient, type WsStatus } from "@/lib/ws";
-import VoiceMic from "@/components/VoiceMic";
+import ActionDock, { type DockAction } from "@/components/ActionDock";
+import { useVoiceDictation, VoiceOverlay } from "@/components/VoiceMic";
 import DirectoryBrowser from "./DirectoryBrowser";
 import FileViewer from "./FileViewer";
 import SharedGallery from "./SharedGallery";
@@ -73,6 +74,10 @@ export default function TerminalScreen({ navigation }: Props) {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [voiceLang, setVoiceLang] = useState("en-US");
+  // Vertical room the active tab's on-screen key bar occupies, reported by the
+  // WebView. The floating action dock and voice overlay are lifted by this so
+  // they sit above the key bar's ENTER cap instead of covering it.
+  const [keybarLift, setKeybarLift] = useState(0);
 
   // Shared per-tab WsClient registry: TabView registers its client on mount so
   // TerminalScreen-level UI (the directory browser) can reach the active tab's
@@ -192,6 +197,23 @@ export default function TerminalScreen({ navigation }: Props) {
     websRef.current[id]?.injectJavaScript("window.__auraFocus&&window.__auraFocus();true;");
   }, []);
 
+  const voice = useVoiceDictation(voiceLang, onVoiceTranscript);
+
+  // Buttons in the floating speed-dial. Add entries here to grow the dock.
+  const dockActions = useMemo<DockAction[]>(
+    () => [
+      {
+        key: "mic",
+        icon: "🎤",
+        activeIcon: "■",
+        label: voice.recording ? "Stop dictation" : "Start voice dictation",
+        active: voice.recording,
+        onPress: voice.toggle,
+      },
+    ],
+    [voice.recording, voice.toggle],
+  );
+
   const onDifitPress = useCallback(() => {
     const id = activeTabIdRef.current;
     if (!id || !cfg) return;
@@ -282,6 +304,18 @@ export default function TerminalScreen({ navigation }: Props) {
   const handleStatus = useCallback((id: string, status: WsStatus) => {
     setStatuses((prev) => (prev[id] === status ? prev : { ...prev, [id]: status }));
   }, []);
+
+  // Only the active tab has keyboard focus, so only it reports a non-zero lift.
+  const handleKeybar = useCallback((lift: number) => {
+    setKeybarLift((prev) => (prev === lift ? prev : lift));
+  }, []);
+
+  // Drop the lift on tab switch; the newly-active tab re-reports once its
+  // keyboard (and key bar) come up. Without this the dock would hang at the old
+  // tab's offset until the next keyboard toggle.
+  useEffect(() => {
+    setKeybarLift(0);
+  }, [tabsState?.activeTabId]);
 
   const addTab = useCallback(() => {
     setTabsState((prev) => {
@@ -400,9 +434,15 @@ export default function TerminalScreen({ navigation }: Props) {
             registerClient={registerClient}
             registerWeb={registerWeb}
             onBuffer={handleBufferDump}
+            onKeybar={handleKeybar}
           />
         ))}
-        <VoiceMic lang={voiceLang} onTranscript={onVoiceTranscript} />
+        <VoiceOverlay
+          recording={voice.recording}
+          display={voice.display}
+          bottomOffset={keybarLift}
+        />
+        <ActionDock actions={dockActions} bottomOffset={keybarLift} />
       </View>
       {activeStatus !== "open" && <OfflineBanner status={activeStatus} />}
 
@@ -718,6 +758,7 @@ type TabViewProps = {
   registerClient: (id: string, client: WsClient | null) => void;
   registerWeb: (id: string, web: WebView | null) => void;
   onBuffer: (text: string) => void;
+  onKeybar: (lift: number) => void;
 };
 
 // One tab = one WebSocket + one WebView (with its own xterm.js instance).
@@ -740,6 +781,7 @@ function TabViewImpl({
   registerClient,
   registerWeb,
   onBuffer,
+  onKeybar,
 }: TabViewProps) {
   const webRef = useRef<WebView | null>(null);
   const clientRef = useRef<WsClient | null>(null);
@@ -933,6 +975,16 @@ function TabViewImpl({
         }
         return;
       }
+      // 'k' = key bar lift (CSS px from WebView bottom to key bar top). Only
+      // the active tab holds keyboard focus, so gate on it — a backgrounded
+      // tab's blur-driven "k0" must not clobber the active tab's offset.
+      if (prefix === 107) {
+        if (activeRef.current) {
+          const lift = Math.max(0, Math.floor(Number(raw.slice(1)) || 0));
+          onKeybar(lift);
+        }
+        return;
+      }
       // 'B' = buffer dump response (utf-8 base64)
       if (prefix === 66) {
         const payload = raw.slice(1);
@@ -950,7 +1002,7 @@ function TabViewImpl({
         return;
       }
     },
-    [onBuffer, flushPending],
+    [onBuffer, flushPending, onKeybar],
   );
 
   const source = useMemo(() => ({ html: terminalHtml, baseUrl: "https://aura.local/" }), []);

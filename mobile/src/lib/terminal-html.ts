@@ -16,6 +16,10 @@
 //   "R"                xterm is mounted and ready to receive
 //   "B<base64>"        full scrollback buffer dump (utf-8), in response to
 //                      __auraDumpBuffer() — used by the copy modal
+//   "k<px>"            distance in CSS px from the bottom of the WebView to
+//                      the top of the on-screen key bar (0 when the bar is
+//                      hidden) — lets the RN floating action dock sit above
+//                      the key bar instead of covering its ENTER cap
 //
 // An on-screen key bar (Esc, Tab, ← ↑ ↓ →) sits at the bottom of the
 // document. Mobile soft keyboards have no arrow keys, so Claude Code's
@@ -252,6 +256,23 @@ export const terminalHtml = `<!doctype html>
     // tracks it. Sizing #root to visualViewport.height keeps the terminal
     // and key bar fully above the keyboard either way.
     var rootEl = document.getElementById('root');
+    // Tell RN how much vertical room the key bar (when shown) occupies at the
+    // bottom of the WebView, so the floating action dock can be lifted clear of
+    // the ENTER cap. We report the gap from the WebView's bottom edge
+    // (window.innerHeight, the full layout viewport) up to the key bar's top.
+    // On Android the WebView is resized for the keyboard, so this is just the
+    // bar height; on iOS the keyboard overlays the WebView, so it also covers
+    // the keyboard height — either way the dock ends up above both. CSS px map
+    // 1:1 to RN dp here (width=device-width, initial-scale=1).
+    function reportDock() {
+      var kb = document.getElementById('keybar');
+      var lift = 0;
+      if (kb && kb.classList.contains('visible')) {
+        var top = kb.getBoundingClientRect().top;
+        lift = Math.max(0, Math.round(window.innerHeight - top));
+      }
+      post('k' + lift);
+    }
     function syncViewport() {
       var vv = window.visualViewport;
       if (vv) {
@@ -259,6 +280,7 @@ export const terminalHtml = `<!doctype html>
         rootEl.style.transform = 'translateY(' + (vv.offsetTop || 0) + 'px)';
       }
       sendResize();
+      reportDock();
     }
     // Coalesce the bursts of visualViewport events fired during a keyboard
     // open/close animation into one resize per frame.

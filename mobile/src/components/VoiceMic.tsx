@@ -1,6 +1,6 @@
-// Voice dictation control: a floating mic button over the terminal that turns
-// speech into text using on-device recognition (expo-speech-recognition →
-// native SFSpeechRecognizer / Android SpeechRecognizer).
+// Voice dictation: speech → text using on-device recognition
+// (expo-speech-recognition → native SFSpeechRecognizer / Android
+// SpeechRecognizer).
 //
 // Behaviour (per product decision): tap to start, tap again to stop. While
 // recording, the live transcript shows in an overlay only — we never stream
@@ -8,19 +8,33 @@
 // there. On stop, the assembled transcript is handed to `onTranscript`, which
 // the terminal injects at the prompt WITHOUT a trailing newline so the user
 // reviews and submits it themselves.
+//
+// The mic itself is rendered by ActionDock (the floating "show more" stack);
+// this module owns the recognition state machine via `useVoiceDictation` and
+// the live-transcript `VoiceOverlay`.
 
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { useCallback, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, StyleSheet, Text, View } from "react-native";
 
-type Props = {
-  /** BCP-47 locale to recognize in (e.g. "en-US", "ja-JP"). */
-  lang: string;
-  /** Called once, on stop, with the final transcript (never empty). */
-  onTranscript: (text: string) => void;
+export type VoiceDictation = {
+  /** True while a recognition session is active. */
+  recording: boolean;
+  /** Live transcript (committed + interim) to show in the overlay. */
+  display: string;
+  /** Start if idle, stop (and emit) if recording. */
+  toggle: () => void;
 };
 
-export default function VoiceMic({ lang, onTranscript }: Props) {
+/**
+ * Drives on-device speech recognition. Returns the recording flag, the live
+ * transcript, and a toggle to start/stop. On stop, the final transcript is
+ * passed to `onTranscript` (never empty).
+ */
+export function useVoiceDictation(
+  lang: string,
+  onTranscript: (text: string) => void,
+): VoiceDictation {
   const [recording, setRecording] = useState(false);
   const [display, setDisplay] = useState("");
 
@@ -97,36 +111,35 @@ export default function VoiceMic({ lang, onTranscript }: Props) {
     ExpoSpeechRecognitionModule.stop();
   }, []);
 
-  const onPress = useCallback(() => {
+  const toggle = useCallback(() => {
     if (recording) stop();
     else void start();
   }, [recording, start, stop]);
 
+  return { recording, display, toggle };
+}
+
+/**
+ * The "Listening…" panel shown above the dock while dictation is active.
+ * Renders nothing when idle. `bottomOffset` lifts it clear of the on-screen
+ * key bar (same lift the dock uses).
+ */
+export function VoiceOverlay({
+  recording,
+  display,
+  bottomOffset = 0,
+}: {
+  recording: boolean;
+  display: string;
+  bottomOffset?: number;
+}) {
+  if (!recording) return null;
   return (
-    <View pointerEvents="box-none" style={styles.root}>
-      {recording && (
-        <View style={styles.overlay} pointerEvents="none">
-          <Text style={styles.overlayLabel}>Listening…</Text>
-          <Text style={styles.overlayText} numberOfLines={4}>
-            {display || "Speak your prompt"}
-          </Text>
-        </View>
-      )}
-      <Pressable
-        onPress={onPress}
-        hitSlop={12}
-        accessibilityRole="button"
-        accessibilityLabel={recording ? "Stop dictation" : "Start voice dictation"}
-        style={({ pressed }) => [
-          styles.fab,
-          recording && styles.fabRecording,
-          pressed && { opacity: 0.7 },
-        ]}
-      >
-        <Text style={[styles.fabIcon, recording && styles.fabIconRecording]}>
-          {recording ? "■" : "🎤"}
-        </Text>
-      </Pressable>
+    <View style={[styles.overlay, { bottom: 80 + bottomOffset }]} pointerEvents="none">
+      <Text style={styles.overlayLabel}>Listening…</Text>
+      <Text style={styles.overlayText} numberOfLines={4}>
+        {display || "Speak your prompt"}
+      </Text>
     </View>
   );
 }
@@ -140,39 +153,10 @@ function joinSpoken(acc: string, next: string): string {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: "flex-end",
-    alignItems: "flex-end",
-  },
-  fab: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    margin: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#14151c",
-    borderWidth: 1,
-    borderColor: "#2a2d3d",
-    // Float above the terminal content.
-    shadowColor: "#000",
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 6,
-  },
-  fabRecording: {
-    backgroundColor: "#3a1620",
-    borderColor: "#f7768e",
-  },
-  fabIcon: { fontSize: 22, color: "#c0caf5" },
-  fabIconRecording: { fontSize: 18, color: "#f7768e", fontWeight: "700" },
   overlay: {
     position: "absolute",
     left: 16,
     right: 16,
-    bottom: 80,
     backgroundColor: "rgba(20, 21, 28, 0.96)",
     borderRadius: 12,
     borderWidth: 1,
