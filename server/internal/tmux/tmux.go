@@ -71,6 +71,30 @@ func KillArgs(id string) []string {
 	return []string{"kill-session", "-t", SessionName(id)}
 }
 
+// SendKeys types text into the (single) pane of the given logical session and
+// submits it with Enter, exactly as if a human had typed at the keyboard. It
+// works whether or not a client is attached — the keystrokes go to the pane
+// owned by the tmux server — which makes it the durable way to drive a session
+// from outside the WebSocket path (e.g. an Alexa skill POSTing a prompt).
+//
+// text is sent with `-l` (literal) so its bytes are never interpreted as tmux
+// key names; the trailing Enter is a separate, non-literal send so it submits
+// the line. Embedded newlines are stripped first: a voice/HTTP-injected prompt
+// is a single line, and a stray newline would submit it half-typed.
+func SendKeys(id, text string) error {
+	name := SessionName(id)
+	text = strings.ReplaceAll(text, "\r", "")
+	text = strings.ReplaceAll(text, "\n", " ")
+
+	if out, err := exec.Command("tmux", "send-keys", "-t", name, "-l", "--", text).CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux send-keys (text): %w: %s", err, out)
+	}
+	if out, err := exec.Command("tmux", "send-keys", "-t", name, "Enter").CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux send-keys (enter): %w: %s", err, out)
+	}
+	return nil
+}
+
 // PaneCurrentPath asks tmux for the working directory of the (single) pane in
 // the given logical session. Used by the mobile directory browser so the user
 // can start navigation from where the shell currently is rather than $HOME.

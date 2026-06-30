@@ -1,0 +1,37 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "オーラ",
+      "intents": [
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
+        {
+          "name": "SendPromptIntent",
+          "slots": [
+            { "name": "prompt", "type": "AMAZON.SearchQuery" }
+          ],
+          "samples": [
+            "{prompt} って伝えて",
+            "{prompt} って言って",
+            "{prompt} とお願いして",
+            "クロードに {prompt} って伝えて"
+          ]
+        },
+        {
+          "name": "ReadReplyIntent",
+          "slots": [],
+          "samples": [
+            "返事は",
+            "返事を教えて",
+            "なんて言ってた",
+            "クロードの返事を読んで",
+            "結果を教えて"
+          ]
+        }
+      ],
+      "types": []
+    }
+  }
+}

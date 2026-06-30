@@ -28,6 +28,15 @@ export AURA_TOKEN=$(openssl rand -hex 32)
   subprotocol.
 - `DELETE /sessions/<id>` — terminates a tmux session (and any difit
   process spawned for it).
+- `POST /sessions/<id>/input` — types a line into the session's prompt and
+  submits it: body `{"text":"..."}` → `tmux send-keys` + Enter. Works without
+  an attached WebSocket, so out-of-band drivers (an Alexa skill, a webhook)
+  can prompt a durable session. 404 if the session isn't running. See
+  [`integrations/alexa`](../integrations/alexa).
+- `GET /sessions/<id>/last-reply` — the session's last assistant message,
+  cached off the Stop hook: `{"sessionId","summary","body"}`. 404 before the
+  first turn completes. Lets a caller that can't hold a live connection read
+  Claude's reply after the fact.
 - `POST /sessions/<id>/difit` — starts (or returns) a per-session
   [difit](https://github.com/yoshiko-pg/difit) instance bound to a free
   port in the session's pane cwd. Response: `{"port":<n>}`.

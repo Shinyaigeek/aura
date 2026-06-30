@@ -1,0 +1,19 @@
+{
+  "name": "aura-alexa",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Alexa custom-skill endpoint for aura, as a Cloudflare Worker",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@peculiar/x509": "^1.12.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "wrangler": "^4.0.0",
+    "@cloudflare/workers-types": "^4.20250601.0"
+  }
+}

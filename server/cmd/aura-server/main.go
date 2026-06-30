@@ -18,7 +18,9 @@ import (
 	"github.com/Shinyaigeek/aura/server/internal/ccmeta"
 	"github.com/Shinyaigeek/aura/server/internal/difit"
 	"github.com/Shinyaigeek/aura/server/internal/events"
+	"github.com/Shinyaigeek/aura/server/internal/input"
 	"github.com/Shinyaigeek/aura/server/internal/notify"
+	"github.com/Shinyaigeek/aura/server/internal/replies"
 	"github.com/Shinyaigeek/aura/server/internal/session"
 	"github.com/Shinyaigeek/aura/server/internal/shares"
 	"github.com/Shinyaigeek/aura/server/internal/tmux"
@@ -99,6 +101,9 @@ func main() {
 	authMw := auth.Token(*token)
 
 	hub := events.New()
+	// replies caches each session's last assistant message off the hub so an
+	// out-of-band caller (e.g. an Alexa skill) can fetch it after the fact.
+	replyStore := replies.Start(hub)
 	titles := ccmeta.NewCache()
 	cwdLookup := func(id string) (string, error) { return tmux.PaneCurrentPath(id) }
 
@@ -122,6 +127,10 @@ func main() {
 	mux.Handle("GET /events", authMw(events.NewHandler(hub)))
 	mux.Handle("DELETE /sessions/{id}", authMw(wrappedKill))
 	mux.Handle("GET /sessions/{id}/meta", authMw(notify.NewMetaHandler(cwdLookup, titles)))
+	// POST a line of text into a session's prompt (Alexa / webhook drivers);
+	// GET the session's last spoken reply back out.
+	mux.Handle("POST /sessions/{id}/input", authMw(input.NewHandler(tmux.SendKeys, tmux.Exists)))
+	mux.Handle("GET /sessions/{id}/last-reply", authMw(replyStore.Handler()))
 	mux.Handle("POST /sessions/{id}/upload", authMw(upload.NewHandler(cwdLookup)))
 	mux.Handle("GET /shares", authMw(shareStore.ListHandler()))
 	mux.Handle("GET /shares/{name}", authMw(shareStore.FileHandler()))
