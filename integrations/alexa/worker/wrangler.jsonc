@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aura-alexa",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": {
+    // Non-secret defaults. Override AURA_BASE_URL for your tunnel hostname.
+    "AURA_SESSION": "default"
+  }
+  // Secrets (set with `wrangler secret put <NAME>`), NOT stored here:
+  //   AURA_BASE_URL            e.g. https://aura.example.com  (can also be a var)
+  //   AURA_TOKEN               the same token aura-server checks
+  //   ALEXA_SKILL_ID           amzn1.ask.skill.xxxxxxxx
+  //   CF_ACCESS_CLIENT_ID      (only if aura is behind Cloudflare Access)
+  //   CF_ACCESS_CLIENT_SECRET
+}
