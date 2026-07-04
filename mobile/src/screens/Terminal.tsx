@@ -22,6 +22,7 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import type { RootStackParamList } from "../../App";
 import { base64ToBytes, bytesToBase64, bytesToUtf8 } from "@/lib/base64";
+import { fetchSessionCapture } from "@/lib/capture-client";
 import { difitUrl, startDifit } from "@/lib/difit-client";
 import { killSession } from "@/lib/kill-session";
 import {
@@ -104,6 +105,12 @@ export default function TerminalScreen({ navigation }: Props) {
   const activeTabIdRef = useRef<string | null>(null);
   activeTabIdRef.current = tabsState?.activeTabId ?? null;
 
+  // cfgRef shadows cfg so onCopyPress can reach the server config (for the
+  // scrollback capture fetch) while staying referentially stable — same
+  // reasoning as activeTabIdRef above.
+  const cfgRef = useRef<ServerConfig | null>(null);
+  cfgRef.current = cfg;
+
   const handleBufferDump = useCallback((text: string) => {
     setCopyText(text);
   }, []);
@@ -171,9 +178,27 @@ export default function TerminalScreen({ navigation }: Props) {
   const onCopyPress = useCallback(() => {
     const id = activeTabIdRef.current;
     if (!id) return;
-    const web = websRef.current[id];
-    if (!web) return;
-    web.injectJavaScript("window.__auraDumpBuffer&&window.__auraDumpBuffer();true;");
+    // Fall back to the on-device xterm buffer (visible screen only) — used
+    // when there's no server config, the server is unreachable, or it's too
+    // old to have the capture endpoint.
+    const dumpVisible = () => {
+      websRef.current[id]?.injectJavaScript(
+        "window.__auraDumpBuffer&&window.__auraDumpBuffer();true;",
+      );
+    };
+    const cfg = cfgRef.current;
+    if (!cfg) {
+      dumpVisible();
+      return;
+    }
+    // Prefer the server-side tmux capture: it includes scrollback history, so
+    // the user can copy output that has scrolled off the top of the screen.
+    fetchSessionCapture(cfg, id)
+      .then((text) => {
+        if (text && text.length > 0) setCopyText(text);
+        else dumpVisible();
+      })
+      .catch(dumpVisible);
   }, []);
 
   const onEscPress = useCallback(() => {

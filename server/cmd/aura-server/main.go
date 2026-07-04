@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Shinyaigeek/aura/server/internal/auth"
+	"github.com/Shinyaigeek/aura/server/internal/capture"
 	"github.com/Shinyaigeek/aura/server/internal/ccmeta"
 	"github.com/Shinyaigeek/aura/server/internal/difit"
 	"github.com/Shinyaigeek/aura/server/internal/events"
@@ -147,6 +148,7 @@ func main() {
 	mux.Handle("GET /events", authMw(events.NewHandler(hub)))
 	mux.Handle("DELETE /sessions/{id}", authMw(wrappedKill))
 	mux.Handle("GET /sessions/{id}/meta", authMw(notify.NewMetaHandler(cwdLookup, titles)))
+	mux.Handle("GET /sessions/{id}/capture", authMw(capture.NewHandler(tmux.CapturePane)))
 	mux.Handle("POST /sessions/{id}/upload", authMw(upload.NewHandler(cwdLookup)))
 	mux.Handle("GET /shares", authMw(shareStore.ListHandler()))
 	mux.Handle("GET /shares/{name}", authMw(shareStore.FileHandler()))
