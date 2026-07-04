@@ -21,7 +21,7 @@ import {
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import type { RootStackParamList } from "../../App";
-import { base64ToBytes, bytesToBase64 } from "@/lib/base64";
+import { base64ToBytes, bytesToBase64, bytesToUtf8 } from "@/lib/base64";
 import { difitUrl, startDifit } from "@/lib/difit-client";
 import { killSession } from "@/lib/kill-session";
 import {
@@ -993,9 +993,11 @@ function TabViewImpl({
           return;
         }
         try {
+          // NOT `new TextDecoder()` — that throws on release-build Hermes and
+          // is why the copy modal always came up empty. bytesToUtf8 is a
+          // hand-rolled UTF-8 decode that runs fine on Hermes.
           const bytes = base64ToBytes(payload);
-          const text = new TextDecoder().decode(bytes);
-          onBuffer(text);
+          onBuffer(bytesToUtf8(bytes));
         } catch {
           onBuffer("");
         }
