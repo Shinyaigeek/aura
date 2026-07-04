@@ -77,19 +77,17 @@ func KillArgs(id string) []string {
 // the visible screen — the on-device xterm dump can only reach what tmux is
 // currently painting.
 //
-//   -p      print to stdout instead of a paste buffer
-//   -J      join wrapped lines and preserve trailing whitespace, so a visually
-//           wrapped long line comes back as one logical line
-//   -S -    start at the beginning of the pane's history (whole scrollback,
-//           bounded by tmux's history-limit)
+// It runs "tmux capture-pane -p -J -S -": -p prints to stdout, -J joins
+// wrapped lines (so a visually wrapped long line comes back as one logical
+// line), and -S - starts at the beginning of the pane's history (the whole
+// scrollback, bounded by tmux's history-limit). All three flags exist in tmux
+// 3.0a (the Ubuntu 20.04 host floor), so this stays within the version
+// constraint.
 //
 // Caveat: while a full-screen alt-screen program is in the foreground, tmux's
 // scrollback is that program's alternate buffer, so capture returns just the
 // visible screen. Claude Code's normal inline output scrolls the main buffer,
 // so its history is captured fine.
-//
-// All three flags exist in tmux 3.0a (the Ubuntu 20.04 host floor), so this
-// stays within the version constraint.
 func CapturePane(id string) (string, error) {
 	cmd := exec.Command("tmux", "capture-pane", "-p", "-J", "-S", "-", "-t", SessionName(id))
 	var stdout, stderr bytes.Buffer
