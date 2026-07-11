@@ -181,6 +181,24 @@ export const terminalHtml = `<!doctype html>
       term.write(bytes);
     };
     window.__auraClear = function () { term.clear(); };
+    // Session Reload: reset the terminal (drops the whole local buffer, incl.
+    // any reflow remnant that shows as duplicated lines) and repaint from a
+    // fresh server-side snapshot. RN fetches tmux capture-pane and hands it
+    // here base64'd, so the redraw lands on a genuinely blank grid. This is the
+    // one reliable fix for duplicated lines/sections: a plain WS reconnect
+    // can't clear them (the server reuses the live tmux PTY on reattach, so
+    // tmux never repaints, and the stale xterm buffer survives). reset() rather
+    // than clear() because we're rebuilding the screen from scratch anyway.
+    window.__auraReload = function (b64) {
+      try { term.reset(); } catch (e) {}
+      if (!b64) return;
+      try {
+        var bin = atob(b64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        term.write(bytes);
+      } catch (e) {}
+    };
     // Serialize the entire active buffer (scrollback + viewport) to UTF-8 text
     // and post it back to RN. The RN side opens a modal with selectable text so
     // the user can pick a region with native handles and hit Copy. We can't

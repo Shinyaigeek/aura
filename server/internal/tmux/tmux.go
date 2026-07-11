@@ -72,24 +72,31 @@ func KillArgs(id string) []string {
 }
 
 // CapturePane returns the full contents of the (single) pane in the given
-// logical session as plain UTF-8 text, including scrollback history. Used by
-// the mobile copy feature so the user can grab output that has scrolled off
-// the visible screen — the on-device xterm dump can only reach what tmux is
-// currently painting.
+// logical session, including scrollback history. Used by the mobile copy
+// feature (ansi=false, plain text so the copy buffer is clean) and by the
+// mobile Session Reload (ansi=true, so the repaint keeps its colours) — the
+// on-device xterm dump can only reach what tmux is currently painting.
 //
 // It runs "tmux capture-pane -p -J -S -": -p prints to stdout, -J joins
 // wrapped lines (so a visually wrapped long line comes back as one logical
 // line), and -S - starts at the beginning of the pane's history (the whole
-// scrollback, bounded by tmux's history-limit). All three flags exist in tmux
-// 3.0a (the Ubuntu 20.04 host floor), so this stays within the version
-// constraint.
+// scrollback, bounded by tmux's history-limit). With ansi=true it adds -e,
+// which emits the SGR escape sequences for text/background attributes so the
+// caller can write the capture straight into a terminal and get colour back.
+// All four flags exist in tmux 3.0a (the Ubuntu 20.04 host floor), so this
+// stays within the version constraint.
 //
 // Caveat: while a full-screen alt-screen program is in the foreground, tmux's
 // scrollback is that program's alternate buffer, so capture returns just the
 // visible screen. Claude Code's normal inline output scrolls the main buffer,
 // so its history is captured fine.
-func CapturePane(id string) (string, error) {
-	cmd := exec.Command("tmux", "capture-pane", "-p", "-J", "-S", "-", "-t", SessionName(id))
+func CapturePane(id string, ansi bool) (string, error) {
+	// -e adds SGR escape sequences (colours/attributes) to the print.
+	args := []string{"capture-pane", "-p", "-J", "-S", "-", "-t", SessionName(id)}
+	if ansi {
+		args = []string{"capture-pane", "-e", "-p", "-J", "-S", "-", "-t", SessionName(id)}
+	}
+	cmd := exec.Command("tmux", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -224,6 +224,44 @@ export default function TerminalScreen({ navigation }: Props) {
 
   const voice = useVoiceDictation(voiceLang, onVoiceTranscript);
 
+  // Session Reload: repaint the terminal from a fresh server snapshot. Fixes
+  // duplicated lines/sections, which are a local xterm reflow remnant — the
+  // tmux grid itself is correct, so a WS reconnect can't clear them (the server
+  // reuses the live PTY on reattach and tmux never repaints). We reset the
+  // xterm buffer and rewrite it from `tmux capture-pane`.
+  const onReloadPress = useCallback(() => {
+    const id = activeTabIdRef.current;
+    if (!id) return;
+    const web = websRef.current[id];
+    // No server config / capture unreachable: reset only. The screen goes blank
+    // until the next output, but the duplication is gone.
+    const resetOnly = () =>
+      web?.injectJavaScript("window.__auraReload&&window.__auraReload('');true;");
+    const cfg = cfgRef.current;
+    if (!cfg) {
+      resetOnly();
+      return;
+    }
+    // ansi: keep the repaint's colours (capture-pane -e). An older server that
+    // ignores the flag just returns plain text — the reload still works, just
+    // monochrome until the app repaints.
+    fetchSessionCapture(cfg, id, { ansi: true })
+      .then((text) => {
+        if (!text) {
+          resetOnly();
+          return;
+        }
+        // capture-pane separates rows with a bare "\n"; xterm needs CR+LF or
+        // the repaint staircases down the screen. Encode UTF-8 → base64 for a
+        // safe inject payload (TextEncoder is Hermes-safe; TextDecoder is not).
+        const b64 = bytesToBase64(new TextEncoder().encode(text.replace(/\r?\n/g, "\r\n")));
+        web?.injectJavaScript(
+          `window.__auraReload&&window.__auraReload(${JSON.stringify(b64)});true;`,
+        );
+      })
+      .catch(resetOnly);
+  }, []);
+
   // Buttons in the floating speed-dial. Add entries here to grow the dock.
   const dockActions = useMemo<DockAction[]>(
     () => [
@@ -235,8 +273,14 @@ export default function TerminalScreen({ navigation }: Props) {
         active: voice.recording,
         onPress: voice.toggle,
       },
+      {
+        key: "reload",
+        icon: "⟳",
+        label: "Session Reload",
+        onPress: onReloadPress,
+      },
     ],
-    [voice.recording, voice.toggle],
+    [voice.recording, voice.toggle, onReloadPress],
   );
 
   const onDifitPress = useCallback(() => {
